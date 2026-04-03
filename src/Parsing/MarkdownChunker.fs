@@ -52,20 +52,26 @@ module MarkdownChunker =
                 }
                 Some fm, i + 2  // skip past closing ---
 
-    /// Extract all markdown and wiki-style links from text.
+    /// Strip fenced code blocks (``` ... ```) to avoid extracting example links.
+    let private stripCodeBlocks (text: string) =
+        let codeBlockRegex = Regex(@"```[\s\S]*?```", RegexOptions.Compiled)
+        codeBlockRegex.Replace(text, "")
+
+    /// Extract all markdown and wiki-style links from text (ignoring code blocks).
     let extractLinks (text: string) =
+        let cleaned = stripCodeBlocks text
         let mdLinks =
-            linkRegex.Matches(text)
+            linkRegex.Matches(cleaned)
             |> Seq.cast<Match>
             |> Seq.filter (fun m ->
                 let target = m.Groups.[2].Value
-                // Only keep relative links to .md files (not http, not images)
+                // Only keep relative links to .md files
                 not (target.StartsWith("http")) && not (target.StartsWith("#"))
-                && (target.EndsWith(".md") || not (target.Contains("."))))
+                && target.EndsWith(".md"))
             |> Seq.map (fun m -> m.Groups.[1].Value, m.Groups.[2].Value)
             |> Seq.toArray
         let wikiLinks =
-            wikiLinkRegex.Matches(text)
+            wikiLinkRegex.Matches(cleaned)
             |> Seq.cast<Match>
             |> Seq.map (fun m -> m.Groups.[1].Value, m.Groups.[1].Value)
             |> Seq.toArray
