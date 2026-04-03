@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>knowledge-sight</AssemblyName>
+    <RootNamespace>AITeam.KnowledgeSight</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jint" Version="4.7.0" />
+    <PackageReference Include="System.Numerics.Tensors" Version="10.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="src/Types/Types.fs" />
+    <Compile Include="src/Config/Config.fs" />
+    <Compile Include="src/Services/Services.fs" />
+    <Compile Include="src/Parsing/MarkdownChunker.fs" />
+    <Compile Include="src/Index/IndexStore.fs" />
+    <Compile Include="src/Query/Format.fs" />
+    <Compile Include="src/Query/Primitives.fs" />
+    <Compile Include="src/Query/QueryEngine.fs" />
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="playbooks\**\*.md" CopyToOutputDirectory="PreserveNewest" LinkBase="playbooks" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="FSharp.Core" Version="10.1.201" />
+  </ItemGroup>
+
+</Project>
