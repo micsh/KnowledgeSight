@@ -43,17 +43,21 @@ module EmbeddingService =
 module FileHashing =
 
     let hashFile (path: string) =
-        use fs = File.OpenRead(path)
-        use sha = SHA256.Create()
-        let bytes = sha.ComputeHash(fs)
-        Convert.ToHexString(bytes).ToLowerInvariant()
+        if not (File.Exists path) then ""
+        else
+            use fs = File.OpenRead(path)
+            use sha = SHA256.Create()
+            let bytes = sha.ComputeHash(fs)
+            Convert.ToHexString(bytes).ToLowerInvariant()
 
     let loadHashes (path: string) : Map<string, string> =
         if not (File.Exists path) then Map.empty
         else
-            let json = File.ReadAllText(path)
-            let dict = JsonSerializer.Deserialize<Collections.Generic.Dictionary<string, string>>(json)
-            dict |> Seq.map (fun kv -> kv.Key, kv.Value) |> Map.ofSeq
+            try
+                let json = File.ReadAllText(path)
+                let dict = JsonSerializer.Deserialize<Collections.Generic.Dictionary<string, string>>(json)
+                dict |> Seq.map (fun kv -> kv.Key, kv.Value) |> Map.ofSeq
+            with _ -> Map.empty
 
     let saveHashes (path: string) (hashes: Map<string, string>) =
         let dict = Collections.Generic.Dictionary<string, string>()
@@ -62,7 +66,7 @@ module FileHashing =
         File.WriteAllText(path, json)
 
     let diffFiles (currentFiles: string[]) (oldHashes: Map<string, string>) =
-        let currentHashes = currentFiles |> Array.map (fun f -> f, hashFile f) |> Map.ofArray
+        let currentHashes = currentFiles |> Array.map (fun f -> f, hashFile f) |> Array.filter (fun (_, h) -> h <> "") |> Map.ofArray
         let changed =
             currentHashes |> Map.toArray |> Array.filter (fun (f, h) ->
                 match Map.tryFind f oldHashes with
