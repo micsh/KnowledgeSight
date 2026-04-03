@@ -328,3 +328,85 @@ module Primitives =
             index.Chunks |> Array.tryFind (fun c -> IndexStore.matchFile c.FilePath startFile) |> Option.map (fun c -> c.FilePath) |> Option.defaultValue startFile
         trace startResolved 1 [Path.GetFileName startResolved]
         results.ToArray()
+
+    // ── novelty — what's new in this text vs existing knowledge? ──
+
+    /// Heuristic: does this paragraph look like knowledge vs casual musing?
+    let private knowledgeSignal (para: string) (index: DocIndex) =
+        let lower = para.ToLowerInvariant()
+        let mutable score = 0
+
+        // Prescriptive language (knowledge patterns)
+        let prescriptive = [| " should "; " must "; " always "; " never "; " when "; " ensure "; " requires "; " depends on "; " means that " |]
+        for p in prescriptive do if lower.Contains(p) then score <- score + 2
+
+        // Causal connectors (reasoning)
+        let causal = [| " because "; " therefore "; " so that "; " in order to "; " consequence "; " implies "; " leads to " |]
+        for c in causal do if lower.Contains(c) then score <- score + 2
+
+        // Declarative structure (definitions/facts)
+        let declarative = [| " is a "; " are "; " defines "; " represents "; " consists of "; " handles "; " processes " |]
+        for d in declarative do if lower.Contains(d) then score <- score + 1
+
+        // Hedging / uncertainty (musing patterns — deduct)
+        let hedging = [| " maybe "; " perhaps "; " i wonder "; " not sure "; " might "; " could be "; " i think "; "?" |]
+        for h in hedging do if lower.Contains(h) then score <- score - 2
+
+        // Concrete code references (file names, types from the index)
+        let codeRefRegex = Regex(@"\b\w+\.(fs|cs|js|ts|py|md)\b", RegexOptions.Compiled)
+        let codeRefs = codeRefRegex.Matches(para).Count
+        score <- score + codeRefs * 2
+
+        // Type/module names from the index
+        let indexNames = index.Chunks |> Array.map (fun c -> c.Heading) |> Array.distinct
+        let nameHits = indexNames |> Array.filter (fun name -> name.Length > 3 && para.Contains(name, StringComparison.OrdinalIgnoreCase))
+        score <- score + nameHits.Length
+
+        // Length bonus — very short paragraphs are rarely knowledge
+        if para.Length < 50 then score <- score - 2
+
+        score
+
+    /// Split text into paragraphs, embed each, compare to index.
+    /// Classifies each paragraph as: off-topic, musing, novel, or covered.
+    let novelty (index: DocIndex) (embeddingUrl: string) (text: string) (threshold: float) =
+        let paragraphs =
+            text.Split([| "\n\n"; "\r\n\r\n" |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.map (fun p -> p.Trim())
+            |> Array.filter (fun p -> p.Length > 30 && not (p.StartsWith("```")) && not (p.StartsWith("|")))
+
+        if paragraphs.Length = 0 then [||]
+        else
+            let prefixed = paragraphs |> Array.map (fun p -> sprintf "search_query: %s" (p.Substring(0, min 200 p.Length)))
+            let embeddings =
+                match EmbeddingService.embed embeddingUrl prefixed |> Async.AwaitTask |> Async.RunSynchronously with
+                | Some embs -> embs
+                | None -> [||]
+
+            if embeddings.Length = 0 then [||]
+            else
+                paragraphs |> Array.mapi (fun i para ->
+                    if i >= embeddings.Length || embeddings.[i].Length = 0 then
+                        mdict [ "paragraph", box (para.Substring(0, min 80 para.Length) + "..."); "status", box "error"; "score", box 0.0 ]
+                    else
+                        let hits = IndexStore.search index embeddings.[i] 1
+                        let bestScore, bestChunk =
+                            if hits.Length > 0 then
+                                let idx, sim = hits.[0]
+                                float sim, Some index.Chunks.[idx]
+                            else 0.0, None
+
+                        let kSignal = knowledgeSignal para index
+                        let status =
+                            if bestScore < 0.5 then "off-topic"       // not in the project's semantic space
+                            elif kSignal < 0 then "musing"            // in-space but reads like discussion, not knowledge
+                            elif kSignal < 1 && bestScore < 0.6 then "musing" // weak signal + low relevance = not knowledge
+                            elif bestScore >= threshold then "covered" // already captured
+                            else "novel"                              // relevant, looks like knowledge, not yet captured
+
+                        let preview = if para.Length > 120 then para.Substring(0, 120) + "..." else para
+                        let nearDoc = bestChunk |> Option.map (fun c -> Path.GetFileName c.FilePath) |> Option.defaultValue ""
+                        let nearHeading = bestChunk |> Option.map (fun c -> c.Heading) |> Option.defaultValue ""
+                        mdict [ "paragraph", box preview; "status", box status
+                                "score", box (Math.Round(bestScore, 3)); "signal", box kSignal
+                                "nearDoc", box nearDoc; "nearSection", box nearHeading ])

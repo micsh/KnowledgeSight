@@ -108,6 +108,15 @@ module QueryEngine =
                 | _ -> 2, "out"
             box (Primitives.walk index session file depth direction))) |> ignore
 
+        // novelty
+        engine.SetValue("novelty", Func<string, obj, obj>(fun text opts ->
+            let threshold =
+                match opts with
+                | :? Jint.Native.JsObject as o ->
+                    match o.Get("threshold") with v when not (v.IsUndefined()) -> v.AsNumber() | _ -> 0.75
+                | _ -> 0.75
+            box (Primitives.novelty index embeddingUrl text threshold))) |> ignore
+
         engine
 
     /// Evaluate JS with IIFE wrapping.

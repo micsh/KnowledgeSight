@@ -13,6 +13,7 @@ let printUsage () =
     eprintfn "  knowledge-sight broken [--repo <path>]               Find broken links"
     eprintfn "  knowledge-sight stale [--repo <path>]                Find docs drifting from source"
     eprintfn "  knowledge-sight health [--repo <path>]               All checks: orphans + broken + stale"
+    eprintfn "  knowledge-sight check <text|file> [--repo <path>]    Find novel knowledge in text"
     eprintfn ""
 
 let parseArgs (args: string[]) =
@@ -28,6 +29,10 @@ let parseArgs (args: string[]) =
         | "index" | "catalog" | "orphans" | "broken" | "stale" | "health" ->
             command <- args.[i]
             i <- i + 1
+        | "check" when i + 1 < args.Length ->
+            command <- "check"
+            query <- args.[i + 1]
+            i <- i + 2
         | "search" when i + 1 < args.Length ->
             command <- "search"
             query <- args.[i + 1]
@@ -292,6 +297,50 @@ let main args =
                 printfn "  %s mentions %s (%s)" doc codeRef age
             if mentionResults.Count > 20 then printfn "  ... and %d more" (mentionResults.Count - 20)
         0
+
+    | "check" when query <> "" ->
+        match IndexStore.load cfg.IndexDir with
+        | None -> eprintfn "No index found. Run: knowledge-sight index"; 1
+        | Some index ->
+            // Input can be a file path or inline text
+            let text =
+                if File.Exists query then File.ReadAllText(query)
+                elif File.Exists(Path.Combine(repo, query)) then File.ReadAllText(Path.Combine(repo, query))
+                elif query = "-" then
+                    // Read from stdin
+                    use reader = new StreamReader(Console.OpenStandardInput())
+                    reader.ReadToEnd()
+                else query
+            let results = Primitives.novelty index cfg.EmbeddingUrl text 0.75
+            let novel = results |> Array.filter (fun d -> string d.["status"] = "novel")
+            let covered = results |> Array.filter (fun d -> string d.["status"] = "covered")
+            let musing = results |> Array.filter (fun d -> string d.["status"] = "musing")
+            let offTopic = results |> Array.filter (fun d -> string d.["status"] = "off-topic")
+
+            printfn "═══ Knowledge Check ═══"
+            printfn "  %d paragraphs analyzed" results.Length
+            printfn "  🆕 %d novel (new knowledge to capture)" novel.Length
+            printfn "  ✅ %d covered (already in knowledge base)" covered.Length
+            printfn "  💭 %d musings (discussion, not knowledge)" musing.Length
+            printfn "  ❌ %d off-topic (unrelated to project)" offTopic.Length
+
+            if novel.Length > 0 then
+                printfn ""
+                printfn "── Novel knowledge to capture ──"
+                for d in novel do
+                    let score = d.["score"] :?> float
+                    let signal = d.["signal"] :?> int
+                    printfn "  [%.2f sig=%d] %s" score signal (string d.["paragraph"])
+                    printfn "       nearest: %s > %s" (string d.["nearDoc"]) (string d.["nearSection"])
+                    printfn ""
+
+            if covered.Length > 0 then
+                printfn "── Already covered ──"
+                for d in covered |> Array.truncate 5 do
+                    printfn "  [%.2f] %s" (d.["score"] :?> float) (string d.["paragraph"])
+                    printfn "       in: %s > %s" (string d.["nearDoc"]) (string d.["nearSection"])
+                if covered.Length > 5 then printfn "  ... and %d more" (covered.Length - 5)
+            0
 
     | "search" | _ when query <> "" ->
         match IndexStore.load cfg.IndexDir with
