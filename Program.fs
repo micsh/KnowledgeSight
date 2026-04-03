@@ -11,6 +11,8 @@ let printUsage () =
     eprintfn "  knowledge-sight search <js> [--repo <path>]          Run a query"
     eprintfn "  knowledge-sight orphans [--repo <path>]              Find unlinked docs"
     eprintfn "  knowledge-sight broken [--repo <path>]               Find broken links"
+    eprintfn "  knowledge-sight stale [--repo <path>]                Find docs drifting from source"
+    eprintfn "  knowledge-sight health [--repo <path>]               All checks: orphans + broken + stale"
     eprintfn ""
 
 let parseArgs (args: string[]) =
@@ -23,7 +25,7 @@ let parseArgs (args: string[]) =
         | "--repo" when i + 1 < args.Length ->
             repo <- args.[i + 1]
             i <- i + 2
-        | "index" | "catalog" | "orphans" | "broken" ->
+        | "index" | "catalog" | "orphans" | "broken" | "stale" | "health" ->
             command <- args.[i]
             i <- i + 1
         | "search" when i + 1 < args.Length ->
@@ -183,6 +185,113 @@ let main args =
             for d in result do
                 printfn "  %s → %s (in %s)" (string d.["from"]) (string d.["target"]) (string d.["section"])
             0
+
+    | "stale" | "health" ->
+        match IndexStore.load cfg.IndexDir with
+        | None -> eprintfn "No index found. Run: knowledge-sight index"; 1
+        | Some index ->
+
+        // Staleness check: for each doc with frontmatter, check if related source files
+        // are newer than the doc itself.
+        // related: can contain doc IDs (ignored here) or file paths/globs.
+        let staleResults = ResizeArray<string * string * DateTime * DateTime>()
+        let mentionResults = ResizeArray<string * string * string>()
+
+        for kv in index.Frontmatters do
+            let docPath = kv.Key
+            let fm = kv.Value
+            if not (File.Exists docPath) then () else
+            let docMtime = File.GetLastWriteTimeUtc(docPath)
+
+            for rel in fm.Related do
+                // Check if this looks like a file path (has extension or path separator)
+                let isFilePath = rel.Contains(".") && (rel.Contains("/") || rel.Contains("\\") || rel.EndsWith(".fs") || rel.EndsWith(".cs") || rel.EndsWith(".js") || rel.EndsWith(".ts") || rel.EndsWith(".py") || rel.EndsWith(".md"))
+                if isFilePath then
+                    // Try to resolve: relative to repo root, or as-is
+                    let candidates = [
+                        Path.Combine(repo, rel)
+                        rel
+                    ]
+                    match candidates |> List.tryFind File.Exists with
+                    | Some sourcePath ->
+                        let sourceMtime = File.GetLastWriteTimeUtc(sourcePath)
+                        if sourceMtime > docMtime then
+                            staleResults.Add(Path.GetFileName docPath, rel, docMtime, sourceMtime)
+                    | None -> ()
+
+        // Also: scan doc content for code file mentions (e.g., "Orchestrator.fs", "Program.cs")
+        // and check if those files exist and are newer
+        let sourceExtensions = [| ".fs"; ".cs"; ".js"; ".ts"; ".py"; ".go"; ".rs" |]
+        let codeFileRegex = System.Text.RegularExpressions.Regex(@"\b(\w+(?:\.\w+)*\.(?:fs|cs|js|ts|py|go|rs))\b", System.Text.RegularExpressions.RegexOptions.Compiled)
+
+        match IndexStore.loadSourceChunks cfg.IndexDir with
+        | None -> ()
+        | Some chunks ->
+            let docFiles = chunks |> Array.map (fun c -> c.FilePath) |> Array.distinct
+            for docPath in docFiles do
+                if File.Exists docPath then
+                    let docMtime = File.GetLastWriteTimeUtc(docPath)
+                    let docContent = chunks |> Array.filter (fun c -> c.FilePath = docPath) |> Array.map (fun c -> c.Content) |> String.concat "\n"
+                    let codeRefs = codeFileRegex.Matches(docContent) |> Seq.cast<System.Text.RegularExpressions.Match> |> Seq.map (fun m -> m.Groups.[1].Value) |> Seq.distinct |> Seq.toArray
+
+                    for codeRef in codeRefs do
+                        // Try to find the file in the repo
+                        let found =
+                            try
+                                Directory.EnumerateFiles(repo, codeRef, SearchOption.AllDirectories)
+                                |> Seq.filter (fun f -> not (f.Contains("node_modules")) && not (f.Contains("bin")) && not (f.Contains("obj")))
+                                |> Seq.tryHead
+                            with _ -> None
+                        match found with
+                        | Some sourcePath ->
+                            let sourceMtime = File.GetLastWriteTimeUtc(sourcePath)
+                            if sourceMtime > docMtime then
+                                let daysBehind = (sourceMtime - docMtime).TotalDays
+                                if daysBehind > 1.0 then
+                                    mentionResults.Add(Path.GetFileName docPath, codeRef, sprintf "%.0f days behind" daysBehind)
+                        | None -> ()
+
+        if command = "health" then
+            // Run all checks
+            let orphanResult = Primitives.orphans index
+            let brokenResult = Primitives.broken index
+            printfn "═══ Knowledge Health Report ═══"
+            printfn ""
+            printfn "📊 Index: %d chunks, %d links, %d docs with frontmatter" index.Chunks.Length index.Links.Length index.Frontmatters.Count
+            printfn ""
+            printfn "🔗 Orphans: %d docs with no incoming links" orphanResult.Length
+            for d in orphanResult |> Array.truncate 5 do
+                printfn "   %s — %s" (string d.["file"]) (string d.["title"])
+            if orphanResult.Length > 5 then printfn "   ... and %d more" (orphanResult.Length - 5)
+            printfn ""
+            printfn "💔 Broken links: %d" brokenResult.Length
+            for d in brokenResult |> Array.truncate 5 do
+                printfn "   %s → %s" (string d.["from"]) (string d.["target"])
+            if brokenResult.Length > 5 then printfn "   ... and %d more" (brokenResult.Length - 5)
+            printfn ""
+            printfn "⏰ Stale (related source newer than doc): %d" staleResults.Count
+            for (doc, source, _, _) in staleResults do
+                printfn "   %s ← %s changed" doc source
+            printfn ""
+            printfn "📝 Mentions (doc references code that changed since): %d" mentionResults.Count
+            for (doc, codeRef, age) in mentionResults |> Seq.truncate 10 |> Seq.toList do
+                printfn "   %s mentions %s (%s)" doc codeRef age
+            if mentionResults.Count > 10 then printfn "   ... and %d more" (mentionResults.Count - 10)
+            printfn ""
+            let total = orphanResult.Length + brokenResult.Length + staleResults.Count + mentionResults.Count
+            if total = 0 then printfn "✅ All clean!"
+            else printfn "⚠ %d issues found" total
+        else
+            // Just stale
+            printfn "Stale docs (related source newer than doc): %d" staleResults.Count
+            for (doc, source, docTime, srcTime) in staleResults do
+                printfn "  %s ← %s (source: %s, doc: %s)" doc source (srcTime.ToString("yyyy-MM-dd")) (docTime.ToString("yyyy-MM-dd"))
+            printfn ""
+            printfn "Docs mentioning changed code files: %d" mentionResults.Count
+            for (doc, codeRef, age) in mentionResults |> Seq.truncate 20 |> Seq.toList do
+                printfn "  %s mentions %s (%s)" doc codeRef age
+            if mentionResults.Count > 20 then printfn "  ... and %d more" (mentionResults.Count - 20)
+        0
 
     | "search" | _ when query <> "" ->
         match IndexStore.load cfg.IndexDir with
