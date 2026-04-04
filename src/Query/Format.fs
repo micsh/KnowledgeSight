@@ -54,7 +54,7 @@ module Format =
                 let matchLine = match d.TryGetValue("matchLine") with true, v when string v <> "" -> sprintf "\n       ▸ %s" (string v) | _ -> ""
                 let tags = match d.TryGetValue("tags") with true, v when string v <> "" -> sprintf " [%s]" (string v) | _ -> ""
                 if id <> "" then sprintf "[%s] %s%s (%s:%s)\n       %s%s%s" id score heading file line summary matchLine tags
-                elif file <> "" then sprintf "%s — %s" file summary
+                elif file <> "" then sprintf "%s (score: %s) %s" file score heading
                 else
                     d |> Seq.map (fun kv -> sprintf "%s=%s" kv.Key (formatValue kv.Value)) |> String.concat ", " |> sprintf "{%s}")
             |> String.concat "\n"
