@@ -284,6 +284,25 @@ let main args =
             if mentionResults.Count > 10 then printfn "   ... and %d more" (mentionResults.Count - 10)
             printfn ""
             let total = orphanResult.Length + brokenResult.Length + staleResults.Count + mentionResults.Count
+
+            // Folder density check — count files (not chunks) per directory
+            let fileDirCounts =
+                index.Chunks
+                |> Array.map (fun c ->
+                    let rel = Path.GetRelativePath(repo, c.FilePath).Replace("\\", "/")
+                    let parts = rel.Split('/')
+                    let dir = if parts.Length >= 2 then parts.[.. parts.Length - 2] |> String.concat "/" else "."
+                    dir, Path.GetFileName c.FilePath)
+                |> Array.distinct
+                |> Array.countBy fst
+            let denseDirs = fileDirCounts |> Array.filter (fun (_, count) -> count >= 8) |> Array.sortByDescending snd
+            if denseDirs.Length > 0 then
+                printfn "📁 Dense folders (consider splitting into subfolders):"
+                for (dir, count) in denseDirs do
+                    printfn "   %s/ — %d docs (use: knowledge-sight search 'cluster(\"%s\")')" dir count dir
+                printfn ""
+            let total = total + denseDirs.Length
+
             if total = 0 then printfn "✅ All clean!"
             else printfn "⚠ %d issues found" total
         else

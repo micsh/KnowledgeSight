@@ -117,6 +117,15 @@ module QueryEngine =
                 | _ -> 0.75
             box (Primitives.novelty index embeddingUrl text threshold))) |> ignore
 
+        // cluster
+        engine.SetValue("cluster", Func<string, obj, obj>(fun dir opts ->
+            let threshold =
+                match opts with
+                | :? Jint.Native.JsObject as o ->
+                    match o.Get("threshold") with v when not (v.IsUndefined()) -> v.AsNumber() | _ -> 0.7
+                | _ -> 0.7
+            box (Primitives.cluster index dir threshold))) |> ignore
+
         engine
 
     /// Evaluate JS with IIFE wrapping.

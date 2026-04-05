@@ -410,3 +410,103 @@ module Primitives =
                         mdict [ "paragraph", box preview; "status", box status
                                 "score", box (Math.Round(bestScore, 3)); "signal", box kSignal
                                 "nearDoc", box nearDoc; "nearSection", box nearHeading ])
+
+    // ── cluster — suggest subfolder groupings for an overcrowded directory ──
+
+    /// Cosine similarity between two vectors.
+    let private cosine (a: float32[]) (b: float32[]) =
+        if a.Length = 0 || b.Length = 0 then 0.0f
+        else
+            let mutable dot = 0.0f
+            let mutable na = 0.0f
+            let mutable nb = 0.0f
+            for i in 0 .. a.Length - 1 do
+                dot <- dot + a.[i] * b.[i]
+                na <- na + a.[i] * a.[i]
+                nb <- nb + b.[i] * b.[i]
+            if na = 0.0f || nb = 0.0f then 0.0f
+            else dot / (sqrt na * sqrt nb)
+
+    /// Simple greedy clustering: assign each doc to the nearest existing cluster center,
+    /// or start a new cluster if similarity to all centers is below threshold.
+    let private greedyCluster (items: (string * float32[])[]) (threshold: float) =
+        let clusters = ResizeArray<ResizeArray<string> * float32[]>()
+        for (name, emb) in items do
+            let mutable bestIdx = -1
+            let mutable bestSim = 0.0f
+            for ci in 0 .. clusters.Count - 1 do
+                let _, center = clusters.[ci]
+                let sim = cosine emb center
+                if sim > bestSim then bestSim <- sim; bestIdx <- ci
+            if float bestSim >= threshold && bestIdx >= 0 then
+                let members, _ = clusters.[bestIdx]
+                members.Add(name)
+            else
+                let members = ResizeArray<string>()
+                members.Add(name)
+                clusters.Add((members, emb))
+        clusters |> Seq.map (fun (members, _) -> members.ToArray()) |> Seq.toArray
+
+    /// Suggest subfolder groupings for docs in a directory.
+    /// Uses embeddings to cluster docs by semantic similarity.
+    let cluster (index: DocIndex) (dir: string) (threshold: float) =
+        let normDir = dir.Replace("\\", "/").TrimEnd('/')
+        // Find docs in the target directory
+        let docsInDir =
+            index.Chunks
+            |> Array.filter (fun c -> c.Level <= 1) // top-level sections only (one per doc)
+            |> Array.filter (fun c ->
+                let rel = c.FilePath.Replace("\\", "/")
+                // Match docs directly in the target dir (not in subdirs)
+                if normDir = "" || normDir = "." then
+                    not (Path.GetFileName(rel) <> rel) // root-level only
+                else
+                    // Check if file is in this dir (works with both absolute and relative paths)
+                    let dirWithSlash = normDir + "/"
+                    let inDir = rel.StartsWith(dirWithSlash) || rel.Contains("/" + dirWithSlash)
+                    if not inDir then false
+                    else
+                        // Only direct children, not in subdirs
+                        let startIdx =
+                            let i = rel.IndexOf(dirWithSlash)
+                            if i >= 0 then i + dirWithSlash.Length else dirWithSlash.Length
+                        let afterDir = rel.Substring(startIdx)
+                        not (afterDir.Contains("/")))
+            |> Array.distinctBy (fun c -> c.FilePath)
+
+        if docsInDir.Length < 4 then
+            // Not enough docs to warrant splitting
+            [| mdict [ "suggestion", box "Folder has fewer than 4 docs — no split needed."; "docs", box docsInDir.Length ] |]
+        else
+            // Get embeddings for these docs
+            let docEmbeddings =
+                docsInDir |> Array.choose (fun c ->
+                    let idx = index.Chunks |> Array.tryFindIndex (fun ch -> ch.FilePath = c.FilePath && ch.Heading = c.Heading)
+                    match idx with
+                    | Some i when i < index.Embeddings.Length && index.Embeddings.[i].Length > 0 ->
+                        Some (Path.GetFileName c.FilePath, index.Embeddings.[i])
+                    | _ -> None)
+
+            if docEmbeddings.Length < 4 then
+                [| mdict [ "suggestion", box "Not enough embedded docs to cluster."; "docs", box docEmbeddings.Length ] |]
+            else
+                let clusters = greedyCluster docEmbeddings threshold
+                // Find common terms in each cluster for suggested folder names
+                clusters
+                |> Array.mapi (fun i members ->
+                    let nameHint =
+                        if members.Length = 1 then members.[0].Replace(".md", "")
+                        else
+                            // Find common prefix or common word
+                            let words =
+                                members
+                                |> Array.collect (fun m -> m.Replace(".md", "").Replace("-", " ").Split(' '))
+                                |> Array.countBy id
+                                |> Array.sortByDescending snd
+                                |> Array.truncate 2
+                                |> Array.map fst
+                            if words.Length > 0 then words |> String.concat "-"
+                            else sprintf "group-%d" (i + 1)
+                    mdict [ "suggestedFolder", box nameHint
+                            "docs", box members.Length
+                            "files", box (members |> String.concat ", ") ])
