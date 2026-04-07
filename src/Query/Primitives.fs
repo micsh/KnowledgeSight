@@ -506,6 +506,7 @@ module Primitives =
                 entityToFiles.[entity].Add(displayName) |> ignore
 
         // Filter by scope if provided (exact or prefix match, not substring)
+        // Normalize scope input the same way entities are normalized (lowercase, strip prefixes/extensions)
         let scopeNorm = if String.IsNullOrWhiteSpace(scope) then "" else normalizeEntity scope
         let filtered =
             entityToFiles
@@ -518,7 +519,24 @@ module Primitives =
         // Classify and build results
         // God-node: top 5% of files or at least 5 — the most-connected concepts
         let godThreshold = max 5 (int (ceil (float totalFiles * 0.05)))
-        let results =
+
+        // Importance heuristic for ranking isolated entities:
+        // - Longer names are more specific/meaningful (penalize short generic terms)
+        // - Names matching indexed file names are more important
+        // - Dotted names (module.method) suggest concrete code references
+        // - Names with mixed segments suggest compound identifiers
+        let indexedFileNames =
+            fileContents |> Array.map (fun (f, _) -> Path.GetFileNameWithoutExtension(f).ToLowerInvariant()) |> Set.ofArray
+        let entityImportance (entity: string) =
+            let lengthScore = min 5 (entity.Length / 3) // 0-5 points for length
+            let fileBonus = if indexedFileNames.Contains(entity) then 3 else 0
+            let structureBonus =
+                if entity.Contains(".") then 2  // dotted module name (e.g., deliveryengine.send)
+                elif entity.Length > 12 then 1  // long single word likely a compound identifier
+                else 0
+            lengthScore + fileBonus + structureBonus
+
+        let preSignal =
             filtered
             |> Array.map (fun kv ->
                 let entity = kv.Key
@@ -528,27 +546,40 @@ module Primitives =
                     if count >= godThreshold then "god-node"
                     elif count >= 2 then "shared"
                     else "isolated"
-                entity, files, count, sig')
+                let importance = entityImportance entity
+                entity, files, count, sig', importance)
+
+        let results =
+            preSignal
             // Apply signal filter
-            |> Array.filter (fun (_, _, count, sig') ->
+            |> Array.filter (fun (_, _, count, sig', _) ->
                 (signal = "" || signal = sig') && count >= minDocs)
-            // Sort: god-nodes first, then shared by count desc, then isolated
-            |> Array.sortBy (fun (entity, _, count, sig') ->
+            // Sort: god-nodes first, then shared by count desc, then isolated by importance desc
+            |> Array.sortBy (fun (entity, _, count, sig', importance) ->
                 let priority = match sig' with "god-node" -> 0 | "shared" -> 1 | _ -> 2
-                priority, -count, entity)
+                priority, -count, -importance, entity)
 
         if results.Length = 0 then
+            let totalEntities = entityToFiles.Count
+            let scopeMatched = preSignal.Length
             let msg =
-                if scopeNorm <> "" then sprintf "No entities matching '%s' found across files." scope
+                if scopeNorm <> "" && scopeMatched = 0 then
+                    sprintf "No entities matching scope '%s' found. The index has %d entities across %d files. Scope uses exact/prefix matching on normalized (lowercase) names — try a shorter prefix or gaps() with no scope to see available entities." scope totalEntities totalFiles
+                elif scopeNorm <> "" && signal <> "" then
+                    let actualSignals = preSignal |> Array.map (fun (_, _, _, s, _) -> s) |> Array.distinct |> String.concat ", "
+                    sprintf "Scope '%s' matched %d entities, but none have signal '%s'. Found signals: %s. Try gaps({scope: '%s'}) without signal filter." scope scopeMatched signal actualSignals scope
+                elif signal <> "" then
+                    sprintf "No entities with signal '%s' found (minDocs=%d). The index has %d entities across %d files." signal minDocs totalEntities totalFiles
                 else "No cross-document entity references found."
-            [| mdict [ "note", box msg ] |]
+            [| mdict [ "note", box msg; "total_entities", box totalEntities; "total_files", box totalFiles ] |]
         else
             results
-            |> Array.map (fun (entity, files, count, sig') ->
+            |> Array.map (fun (entity, files, count, sig', importance) ->
                 mdict [ "entity", box entity
                         "sources", box (files |> String.concat ", ")
                         "count", box count
                         "signal", box sig'
+                        "importance", box importance
                         "total_files", box totalFiles ])
 
     // ── cluster — suggest subfolder groupings for an overcrowded directory ──
