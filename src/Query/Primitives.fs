@@ -411,6 +411,146 @@ module Primitives =
                                 "score", box (Math.Round(bestScore, 3)); "signal", box kSignal
                                 "nearDoc", box nearDoc; "nearSection", box nearHeading ])
 
+    // ── gaps — cross-document entity coverage analysis ──
+
+    /// Extract entity references from markdown text via regex.
+    /// Returns normalized entity names: identifiers, file names, modules, paths.
+    let private extractEntityRefs (text: string) =
+        let refs = HashSet<string>(StringComparer.OrdinalIgnoreCase)
+
+        // Backticked file names: `SearchTools.fs`, `config.yaml`
+        for m in Regex.Matches(text, @"`([A-Za-z]\w+\.(?:fs|cs|fsx|js|ts|py|go|rs|yaml|json|md|toml))`") do
+            refs.Add(m.Groups.[1].Value) |> ignore
+
+        // Bare source file names in prose: SearchTools.fs, AppOrchestrator.cs
+        for m in Regex.Matches(text, @"\b([A-Z][A-Za-z]+\.(?:fs|cs|js|ts|py))\b") do
+            refs.Add(m.Groups.[1].Value) |> ignore
+
+        // Module-style names: AITeam.Orchestration, System.IO
+        for m in Regex.Matches(text, @"\b((?:[A-Z][A-Za-z]+\.){1,4}[A-Z][A-Za-z]+)\b") do
+            let full = m.Groups.[1].Value
+            if not (full.EndsWith(".fs") || full.EndsWith(".cs") || full.EndsWith(".js") || full.EndsWith(".md")) then
+                refs.Add(full) |> ignore
+                // Also add short form (strip common prefixes)
+                for prefix in [| "AITeam."; "System."; "Microsoft." |] do
+                    if full.StartsWith(prefix) then
+                        refs.Add(full.Substring(prefix.Length)) |> ignore
+
+        // Backticked CamelCase identifiers: `DeliveryEngine`, `ICapabilityResolver`
+        for m in Regex.Matches(text, @"`([A-Z][A-Za-z]{2,}(?:\.[A-Z][A-Za-z]+)*)`") do
+            let v = m.Groups.[1].Value
+            if not (Regex.IsMatch(v, @"\.\w{1,4}$")) then // skip file extensions already caught
+                refs.Add(v) |> ignore
+
+        // Path references: `src/foo/Bar.fs`, `.agents/tools/thing.py`
+        for m in Regex.Matches(text, @"`((?:\.agents|src|tests|architecture)/[^\s`]+)`") do
+            refs.Add(Path.GetFileName(m.Groups.[1].Value)) |> ignore
+
+        refs |> Seq.toArray
+
+    /// Normalize an entity name for deduplication.
+    /// Strips common prefixes and file extensions so `DeliveryEngine.fs` and `DeliveryEngine` merge.
+    let private normalizeEntity (name: string) =
+        let stripped =
+            [| "AITeam."; "System."; "Microsoft." |]
+            |> Array.fold (fun (s: string) prefix ->
+                if s.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) then s.Substring(prefix.Length) else s) name
+        // Strip known file extensions for dedup
+        let noExt =
+            Regex.Replace(stripped, @"\.(fs|cs|fsx|js|ts|py|go|rs|yaml|json|md|toml)$", "", RegexOptions.IgnoreCase)
+        noExt.ToLowerInvariant()
+
+    /// Cross-document gap analysis. Works on whatever's in the index.
+    /// Groups chunks by source file, extracts entity refs, builds a bipartite
+    /// entity→files index, classifies: shared / isolated / god-node.
+    let gaps (index: DocIndex) (chunks: DocChunk[] option) (scope: string) (minDocs: int) (signal: string) =
+        // Use source chunks for content (richer), fall back to summaries from index
+        let contentByChunk =
+            match chunks with
+            | Some chs ->
+                chs |> Array.map (fun c -> c.FilePath, c.Content)
+            | None ->
+                index.Chunks |> Array.map (fun c -> c.FilePath, c.Summary)
+
+        // Group content by source file
+        let fileContents =
+            contentByChunk
+            |> Array.groupBy fst
+            |> Array.map (fun (file, pairs) ->
+                let combined = pairs |> Array.map snd |> String.concat "\n"
+                file, combined)
+
+        let totalFiles = fileContents.Length
+        if totalFiles < 2 then
+            [| mdict [ "note", box "Need at least 2 indexed files for gap analysis."; "files", box totalFiles ] |]
+        else
+
+        // Extract entity refs per file (filter noise: min 3 chars, no empty)
+        let fileEntities =
+            fileContents
+            |> Array.map (fun (file, content) ->
+                let entities =
+                    extractEntityRefs content
+                    |> Array.map normalizeEntity
+                    |> Array.filter (fun e -> e.Length >= 3)
+                    |> Array.distinct
+                file, entities)
+
+        // Build bipartite index: entity → set<file>
+        let entityToFiles = Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        for (file, entities) in fileEntities do
+            let displayName = Path.GetFileNameWithoutExtension(file)
+            for entity in entities do
+                if not (entityToFiles.ContainsKey(entity)) then
+                    entityToFiles.[entity] <- HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                entityToFiles.[entity].Add(displayName) |> ignore
+
+        // Filter by scope if provided (exact or prefix match, not substring)
+        let scopeNorm = if String.IsNullOrWhiteSpace(scope) then "" else normalizeEntity scope
+        let filtered =
+            entityToFiles
+            |> Seq.filter (fun kv ->
+                if scopeNorm = "" then true
+                else kv.Key = scopeNorm || kv.Key.StartsWith(scopeNorm + ".") || scopeNorm.StartsWith(kv.Key + "."))
+            |> Seq.filter (fun kv -> kv.Value.Count >= 1)
+            |> Seq.toArray
+
+        // Classify and build results
+        // God-node: top 5% of files or at least 5 — the most-connected concepts
+        let godThreshold = max 5 (int (ceil (float totalFiles * 0.05)))
+        let results =
+            filtered
+            |> Array.map (fun kv ->
+                let entity = kv.Key
+                let files = kv.Value |> Seq.sort |> Seq.toArray
+                let count = files.Length
+                let sig' =
+                    if count >= godThreshold then "god-node"
+                    elif count >= 2 then "shared"
+                    else "isolated"
+                entity, files, count, sig')
+            // Apply signal filter
+            |> Array.filter (fun (_, _, count, sig') ->
+                (signal = "" || signal = sig') && count >= minDocs)
+            // Sort: god-nodes first, then shared by count desc, then isolated
+            |> Array.sortBy (fun (entity, _, count, sig') ->
+                let priority = match sig' with "god-node" -> 0 | "shared" -> 1 | _ -> 2
+                priority, -count, entity)
+
+        if results.Length = 0 then
+            let msg =
+                if scopeNorm <> "" then sprintf "No entities matching '%s' found across files." scope
+                else "No cross-document entity references found."
+            [| mdict [ "note", box msg ] |]
+        else
+            results
+            |> Array.map (fun (entity, files, count, sig') ->
+                mdict [ "entity", box entity
+                        "sources", box (files |> String.concat ", ")
+                        "count", box count
+                        "signal", box sig'
+                        "total_files", box totalFiles ])
+
     // ── cluster — suggest subfolder groupings for an overcrowded directory ──
 
     /// Cosine similarity between two vectors.

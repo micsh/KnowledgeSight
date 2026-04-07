@@ -126,6 +126,20 @@ module QueryEngine =
                 | _ -> 0.7
             box (Primitives.cluster index dir threshold))) |> ignore
 
+        // gaps — use JsValue to avoid Jint's ToObject() conversion
+        engine.SetValue("gaps", Func<Jint.Native.JsValue, obj>(fun opts ->
+            let scope, minDocs, signal =
+                if isNull (box opts) || opts.IsUndefined() || opts.IsNull() then "", 1, ""
+                elif opts.IsString() then opts.AsString(), 1, ""
+                elif opts.IsObject() then
+                    let o = opts.AsObject()
+                    let s = match o.Get("scope") with v when not (v.IsUndefined()) && not (v.IsNull()) -> v.AsString() | _ -> ""
+                    let m = match o.Get("min_docs") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 1
+                    let sig' = match o.Get("signal") with v when not (v.IsUndefined()) && not (v.IsNull()) -> v.AsString() | _ -> ""
+                    s, m, sig'
+                else "", 1, ""
+            box (Primitives.gaps index chunks scope minDocs signal))) |> ignore
+
         engine
 
     /// Evaluate JS with IIFE wrapping.
