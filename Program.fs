@@ -66,7 +66,7 @@ let main args =
         let hashesPath = Path.Combine(cfg.IndexDir, "hashes.json")
         let oldHashes = FileHashing.loadHashes hashesPath
         let relFiles = docFiles |> Array.map (fun f -> Path.GetRelativePath(repo, f))
-        let changed, unchanged, removed, currentHashes = FileHashing.diffFiles relFiles oldHashes
+        let changed, unchanged, removed, currentHashes = FileHashing.diffFiles relFiles oldHashes repo
         let relToAbs = Array.zip relFiles docFiles |> Map.ofArray
 
         if changed.Length = 0 && removed.Length = 0 then

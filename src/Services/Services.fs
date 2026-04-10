@@ -65,8 +65,8 @@ module FileHashing =
         let json = JsonSerializer.Serialize(dict, JsonSerializerOptions(WriteIndented = true))
         File.WriteAllText(path, json)
 
-    let diffFiles (currentFiles: string[]) (oldHashes: Map<string, string>) =
-        let currentHashes = currentFiles |> Array.map (fun f -> f, hashFile f) |> Array.filter (fun (_, h) -> h <> "") |> Map.ofArray
+    let diffFiles (currentFiles: string[]) (oldHashes: Map<string, string>) (repoRoot: string) =
+        let currentHashes = currentFiles |> Array.map (fun f -> f, hashFile (Path.Combine(repoRoot, f))) |> Array.filter (fun (_, h) -> h <> "") |> Map.ofArray
         let changed =
             currentHashes |> Map.toArray |> Array.filter (fun (f, h) ->
                 match Map.tryFind f oldHashes with
