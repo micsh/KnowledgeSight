@@ -3,37 +3,138 @@ open System.IO
 open AITeam.KnowledgeSight
 
 let printUsage () =
-    eprintfn "AITeam.KnowledgeSight — knowledge/doc intelligence for any repo"
-    eprintfn ""
-    eprintfn "Usage:"
-    eprintfn "  knowledge-sight index [--repo <path>]                Build/update index"
-    eprintfn "  knowledge-sight catalog [--repo <path>]              Show topic map"
-    eprintfn "  knowledge-sight search <js> [--repo <path>]          Run a query"
-    eprintfn "  knowledge-sight orphans [--repo <path>]              Find unlinked docs"
-    eprintfn "  knowledge-sight broken [--repo <path>]               Find broken links"
-    eprintfn "  knowledge-sight stale [--repo <path>]                Find docs drifting from source"
-    eprintfn "  knowledge-sight health [--repo <path>]               All checks: orphans + broken + stale"
-    eprintfn "  knowledge-sight check <text|file> [--repo <path>]    Find novel knowledge in text"
-    eprintfn ""
+    printfn "AITeam.KnowledgeSight — knowledge/doc intelligence for any repo"
+    printfn ""
+    printfn "Usage:"
+    printfn "  knowledge-sight index [--repo <path>]                Build/update index"
+    printfn "  knowledge-sight catalog [--repo <path>]              Show topic map"
+    printfn "  knowledge-sight search <js> [--repo <path>]          Run a query"
+    printfn "  knowledge-sight eval <js> [--repo <path>]            Alias for search"
+    printfn "  knowledge-sight orphans [--repo <path>]              Find unlinked docs"
+    printfn "  knowledge-sight broken [--repo <path>]               Find broken links"
+    printfn "  knowledge-sight stale [--repo <path>]                Find docs drifting from source"
+    printfn "  knowledge-sight health [--repo <path>]               All checks: orphans + broken + stale"
+    printfn "  knowledge-sight check <text|file> [--repo <path>]    Find novel knowledge in text"
+    printfn "  knowledge-sight check <js> --expr [--repo <path>]    Check with JS expression (UDFs available)"
+    printfn "  knowledge-sight fn add <name> <body> [options]       Define a reusable function"
+    printfn "  knowledge-sight fn list [--verbose] [--json]         List saved functions"
+    printfn "  knowledge-sight fn rm <name> [--repo <path>]         Remove a function"
+    printfn "  knowledge-sight --help                               Show this help"
+    printfn ""
+    printfn "Functions:"
+    printfn "  Save chains of primitives as reusable functions. Example:"
+    printfn "    knowledge-sight fn add deepSearch --params \"q\" \"search(q).concat(similar(search(q)[0]))\""
+    printfn "    knowledge-sight search \"deepSearch('auth')\""
+    printfn ""
+    printfn "  Options for 'fn add':"
+    printfn "    --params \"a,b\"          Comma-separated parameter names"
+    printfn "    --desc \"description\"    Optional description"
+    printfn "    --file <path>           Read function body from a file"
+    printfn ""
+    printfn "Primitives (available in search expressions):"
+    printfn "  search(query, {limit, tag, file})   Semantic search across indexed chunks"
+    printfn "  catalog()                            Topic map of all indexed docs"
+    printfn "  context(file)                        Overview of a file with sections/links"
+    printfn "  expand(refId)                        Expand R# ref to full chunk content"
+    printfn "  neighborhood(refId, {before, after}) Surrounding sections around a ref"
+    printfn "  similar(refId, {limit})              Semantically similar chunks"
+    printfn "  grep(pattern, {limit, file})         Regex search over chunk content"
+    printfn "  mentions(term, {limit})              Find term mentions across docs"
+    printfn "  files(pattern)                       List indexed files"
+    printfn "  backlinks(file)                      Incoming links to a file"
+    printfn "  links(file)                          Outgoing links from a file"
+    printfn "  orphans()                            Docs with no incoming links"
+    printfn "  broken()                             Broken links across docs"
+    printfn "  placement(content, {limit})          Suggest where new content fits"
+    printfn "  walk(file, {depth, direction})       Traverse the link graph"
+    printfn "  novelty(text, {threshold})           Detect novel knowledge in text"
+    printfn "  cluster(dir, {threshold})            Cluster docs by similarity"
+    printfn "  gaps({scope, min_docs, signal})      Find coverage gaps"
+    printfn ""
+    printfn "Composition helpers:"
+    printfn "  pipe(value, fn1, fn2, ...)           Thread value through functions"
+    printfn "  tap(value, fn)                       Run fn for side-effects, return value"
+    printfn "  mergeBy(key, arr1, arr2, ...)        Union arrays with dedup by key"
+    printfn "  print(value)                         Debug output to stderr"
+    printfn ""
+    printfn "Note: UDFs are available in search/eval and check --expr. Other commands"
+    printfn "  (orphans, broken, catalog, etc.) use the same primitives available via search."
+    printfn ""
 
 let parseArgs (args: string[]) =
     let mutable repo = Environment.CurrentDirectory
     let mutable command = ""
+    let mutable verbose = false
+    let mutable jsonOut = false
     let mutable query = ""
+    let mutable fnName = ""
+    let mutable fnParams = ""
+    let mutable fnDesc = ""
+    let mutable fnFile = ""
+    let mutable exprMode = false
     let mutable i = 0
     while i < args.Length do
         match args.[i] with
         | "--repo" when i + 1 < args.Length ->
             repo <- args.[i + 1]
             i <- i + 2
+        | "--help" | "-h" ->
+            command <- "help"
+            i <- i + 1
         | "index" | "catalog" | "orphans" | "broken" | "stale" | "health" ->
             command <- args.[i]
             i <- i + 1
+        | "fn" when i + 1 < args.Length ->
+            match args.[i + 1] with
+            | "add" when i + 2 < args.Length ->
+                command <- "fn-add"
+                fnName <- args.[i + 2]
+                i <- i + 3
+                // Parse remaining fn add args
+                while i < args.Length do
+                    match args.[i] with
+                    | "--params" when i + 1 < args.Length ->
+                        fnParams <- args.[i + 1]
+                        i <- i + 2
+                    | "--desc" when i + 1 < args.Length ->
+                        fnDesc <- args.[i + 1]
+                        i <- i + 2
+                    | "--file" when i + 1 < args.Length ->
+                        fnFile <- args.[i + 1]
+                        i <- i + 2
+                    | "--repo" when i + 1 < args.Length ->
+                        repo <- args.[i + 1]
+                        i <- i + 2
+                    | _ when query = "" ->
+                        query <- args.[i]
+                        i <- i + 1
+                    | _ -> i <- i + 1
+            | "list" ->
+                command <- "fn-list"
+                i <- i + 2
+                while i < args.Length do
+                    match args.[i] with
+                    | "--verbose" | "-v" -> verbose <- true; i <- i + 1
+                    | "--json" -> jsonOut <- true; i <- i + 1
+                    | "--repo" when i + 1 < args.Length -> repo <- args.[i + 1]; i <- i + 2
+                    | _ -> i <- i + 1
+            | "rm" when i + 2 < args.Length ->
+                command <- "fn-rm"
+                fnName <- args.[i + 2]
+                i <- i + 3
+            | _ ->
+                command <- "fn-list"
+                i <- i + 2
         | "check" when i + 1 < args.Length ->
             command <- "check"
             query <- args.[i + 1]
             i <- i + 2
-        | "search" when i + 1 < args.Length ->
+            while i < args.Length do
+                match args.[i] with
+                | "--expr" -> exprMode <- true; i <- i + 1
+                | "--repo" when i + 1 < args.Length -> repo <- args.[i + 1]; i <- i + 2
+                | _ -> i <- i + 1
+        | "search" | "eval" when i + 1 < args.Length ->
             command <- "search"
             query <- args.[i + 1]
             i <- i + 2
@@ -42,17 +143,72 @@ let parseArgs (args: string[]) =
             query <- s
             i <- i + 1
         | _ -> i <- i + 1
-    repo, command, query
+    repo, command, query, fnName, fnParams, fnDesc, fnFile, verbose, jsonOut, exprMode
 
 [<EntryPoint>]
 let main args =
     if args.Length = 0 then printUsage(); 0
     else
 
-    let repo, command, query = parseArgs args
+    let repo, command, query, fnName, fnParams, fnDesc, fnFile, verbose, jsonOut, exprMode = parseArgs args
+
+    if command = "help" then printUsage(); 0
+    else
+
     let cfg = Config.load repo
 
     match command with
+    | "fn-add" ->
+        let body =
+            if fnFile <> "" then
+                let path = if File.Exists fnFile then fnFile else Path.Combine(repo, fnFile)
+                if File.Exists path then File.ReadAllText(path)
+                else eprintfn "File not found: %s" fnFile; ""
+            else query
+        if body = "" then
+            eprintfn "No function body provided. Pass it as an argument or use --file <path>."
+            1
+        else
+            let ps = if fnParams = "" then [||] else fnParams.Split(',') |> Array.map (fun s -> s.Trim())
+            let fn = { Name = fnName; Params = ps; Body = body; Description = fnDesc }
+            match FunctionStore.add repo fn with
+            | Ok msg -> printfn "%s" msg; 0
+            | Error msg -> eprintfn "Error: %s" msg; 1
+
+    | "fn-list" ->
+        let fns = FunctionStore.load repo
+        if fns.Length = 0 then
+            if jsonOut then printfn "[]"
+            else printfn "No functions defined. Use 'knowledge-sight fn add <name> <body>' to create one."
+        elif jsonOut then
+            let options = System.Text.Json.JsonSerializerOptions(WriteIndented = true)
+            let arr = fns |> Array.map (fun f ->
+                dict [ "name", box f.Name; "params", box f.Params; "body", box f.Body; "description", box f.Description ])
+            printfn "%s" (System.Text.Json.JsonSerializer.Serialize(arr, options))
+        elif verbose then
+            printfn "%d function(s) in %s:" fns.Length repo
+            printfn ""
+            for f in fns do
+                let joined = f.Params |> String.concat ", "
+                let ps = if f.Params.Length = 0 then "()" else sprintf "(%s)" joined
+                printfn "  %s%s" f.Name ps
+                if f.Description <> "" then printfn "    %s" f.Description
+                printfn "    body: %s" f.Body
+                printfn ""
+        else
+            printfn "%d function(s):" fns.Length
+            for f in fns do
+                let joined = f.Params |> String.concat ", "
+                let ps = if f.Params.Length = 0 then "()" else sprintf "(%s)" joined
+                let desc = if f.Description <> "" then sprintf " — %s" f.Description else ""
+                printfn "  %s%s%s" f.Name ps desc
+        0
+
+    | "fn-rm" ->
+        match FunctionStore.remove repo fnName with
+        | Ok msg -> printfn "%s" msg; 0
+        | Error msg -> eprintfn "Error: %s" msg; 1
+
     | "index" ->
         eprintfn "▶ Indexing docs in %s" repo
         let docFiles = Config.findDocFiles cfg
@@ -321,52 +477,64 @@ let main args =
         match IndexStore.load cfg.IndexDir with
         | None -> eprintfn "No index found. Run: knowledge-sight index"; 1
         | Some index ->
-            // Input can be a file path or inline text
-            let text =
-                if File.Exists query then File.ReadAllText(query)
-                elif File.Exists(Path.Combine(repo, query)) then File.ReadAllText(Path.Combine(repo, query))
-                elif query = "-" then
-                    // Read from stdin
-                    use reader = new StreamReader(Console.OpenStandardInput())
-                    reader.ReadToEnd()
-                else query
-            let results = Primitives.novelty index cfg.EmbeddingUrl text 0.75
-            let novel = results |> Array.filter (fun d -> string d.["status"] = "novel")
-            let covered = results |> Array.filter (fun d -> string d.["status"] = "covered")
-            let musing = results |> Array.filter (fun d -> string d.["status"] = "musing")
-            let offTopic = results |> Array.filter (fun d -> string d.["status"] = "off-topic")
+            if exprMode then
+                // JS expression mode: evaluate through QueryEngine (UDFs available)
+                let chunks = IndexStore.loadSourceChunks cfg.IndexDir
+                let engine = QueryEngine.create index chunks cfg.EmbeddingUrl cfg.IndexDir cfg.RepoRoot
+                let result = QueryEngine.eval engine query
+                // Try to apply check-style formatting if result looks like novelty output
+                printfn "%s" result
+                0
+            else
+                // Plain text mode: read text, invoke novelty directly
+                let text =
+                    if File.Exists query then File.ReadAllText(query)
+                    elif File.Exists(Path.Combine(repo, query)) then File.ReadAllText(Path.Combine(repo, query))
+                    elif query = "-" then
+                        use reader = new StreamReader(Console.OpenStandardInput())
+                        reader.ReadToEnd()
+                    else query
+                let results = Primitives.novelty index cfg.EmbeddingUrl text 0.75
+                let novel = results |> Array.filter (fun d -> string d.["status"] = "novel")
+                let covered = results |> Array.filter (fun d -> string d.["status"] = "covered")
+                let musing = results |> Array.filter (fun d -> string d.["status"] = "musing")
+                let offTopic = results |> Array.filter (fun d -> string d.["status"] = "off-topic")
 
-            printfn "═══ Knowledge Check ═══"
-            printfn "  %d paragraphs analyzed" results.Length
-            printfn "  🆕 %d novel (new knowledge to capture)" novel.Length
-            printfn "  ✅ %d covered (already in knowledge base)" covered.Length
-            printfn "  💭 %d musings (discussion, not knowledge)" musing.Length
-            printfn "  ❌ %d off-topic (unrelated to project)" offTopic.Length
+                printfn "═══ Knowledge Check ═══"
+                printfn "  %d paragraphs analyzed" results.Length
+                let novelLabel = sprintf "  🆕 %d novel (new knowledge to capture)" novel.Length
+                let coveredLabel = sprintf "  ✅ %d covered (already in knowledge base)" covered.Length
+                let musingLabel = sprintf "  💭 %d musings (discussion, not knowledge)" musing.Length
+                let offTopicLabel = sprintf "  ❌ %d off-topic (unrelated to project)" offTopic.Length
+                printfn "%s" novelLabel
+                printfn "%s" coveredLabel
+                printfn "%s" musingLabel
+                printfn "%s" offTopicLabel
 
-            if novel.Length > 0 then
-                printfn ""
-                printfn "── Novel knowledge to capture ──"
-                for d in novel do
-                    let score = d.["score"] :?> float
-                    let signal = d.["signal"] :?> int
-                    printfn "  [%.2f sig=%d] %s" score signal (string d.["paragraph"])
-                    printfn "       nearest: %s > %s" (string d.["nearDoc"]) (string d.["nearSection"])
+                if novel.Length > 0 then
                     printfn ""
+                    printfn "── Novel knowledge to capture ──"
+                    for d in novel do
+                        let score = d.["score"] :?> float
+                        let signal = d.["signal"] :?> int
+                        printfn "  [%.2f sig=%d] %s" score signal (string d.["paragraph"])
+                        printfn "       nearest: %s > %s" (string d.["nearDoc"]) (string d.["nearSection"])
+                        printfn ""
 
-            if covered.Length > 0 then
-                printfn "── Already covered ──"
-                for d in covered |> Array.truncate 5 do
-                    printfn "  [%.2f] %s" (d.["score"] :?> float) (string d.["paragraph"])
-                    printfn "       in: %s > %s" (string d.["nearDoc"]) (string d.["nearSection"])
-                if covered.Length > 5 then printfn "  ... and %d more" (covered.Length - 5)
-            0
+                if covered.Length > 0 then
+                    printfn "── Already covered ──"
+                    for d in covered |> Array.truncate 5 do
+                        printfn "  [%.2f] %s" (d.["score"] :?> float) (string d.["paragraph"])
+                        printfn "       in: %s > %s" (string d.["nearDoc"]) (string d.["nearSection"])
+                    if covered.Length > 5 then printfn "  ... and %d more" (covered.Length - 5)
+                0
 
     | "search" | _ when query <> "" ->
         match IndexStore.load cfg.IndexDir with
         | None -> eprintfn "No index found. Run: knowledge-sight index"; 1
         | Some index ->
             let chunks = IndexStore.loadSourceChunks cfg.IndexDir
-            let engine = QueryEngine.create index chunks cfg.EmbeddingUrl cfg.IndexDir
+            let engine = QueryEngine.create index chunks cfg.EmbeddingUrl cfg.IndexDir cfg.RepoRoot
             let result = QueryEngine.eval engine query
             printfn "%s" result
             0

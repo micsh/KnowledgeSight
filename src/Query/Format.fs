@@ -6,7 +6,92 @@ open System.Text.Json
 /// Result formatting for LLM and CLI consumption.
 module Format =
 
-    let rec formatValue (v: obj) : string =
+    let private fmtScore (d: IDictionary<string, obj>) =
+        match d.TryGetValue("score") with
+        | true, v ->
+            match v with
+            | :? float as f -> sprintf "%.2f  " f
+            | _ -> try sprintf "%.2f  " (System.Convert.ToDouble(v)) with _ -> ""
+        | _ -> ""
+
+    let private sourceKey = "__ks_source__"
+
+    let private getSource (d: IDictionary<string, obj>) =
+        match d.TryGetValue(sourceKey) with true, v -> string v | _ -> ""
+
+    /// Format a single dict item, using source annotation when available.
+    let rec private formatItem (d: IDictionary<string, obj>) =
+        match d.TryGetValue("error") with
+        | true, err -> sprintf "Error: %O" err
+        | _ ->
+        let source = getSource d
+        match source with
+        | "catalog" ->
+            let dir = match d.TryGetValue("directory") with true, v -> string v | _ -> "?"
+            let docs = match d.TryGetValue("docs") with true, v -> string v | _ -> "?"
+            let sections = match d.TryGetValue("sections") with true, v -> string v | _ -> "?"
+            let tags = match d.TryGetValue("topTags") with true, v when string v <> "" -> sprintf "\n    Tags: %s" (string v) | _ -> ""
+            let titles = match d.TryGetValue("titles") with true, v when string v <> "" -> sprintf "\n    %s" (string v) | _ -> ""
+            sprintf "%-30s %s docs, %s sections%s%s" dir docs sections tags titles
+        | "orphans" | "files" ->
+            let file = match d.TryGetValue("file") with true, v -> string v | _ -> ""
+            let title = match d.TryGetValue("title") with true, v when string v <> "" -> sprintf " — %s" (string v) | _ -> ""
+            let sections = match d.TryGetValue("sections") with true, v -> sprintf " (%s sections)" (string v) | _ -> ""
+            let path = match d.TryGetValue("path") with true, v when string v <> "" -> sprintf "  %s" (string v) | _ -> ""
+            sprintf "%s%s%s%s" file title sections path
+        | "broken" ->
+            let from' = match d.TryGetValue("from") with true, v -> string v | _ -> ""
+            let target = match d.TryGetValue("target") with true, v -> string v | _ -> ""
+            let section = match d.TryGetValue("section") with true, v when string v <> "" -> sprintf " (in %s)" (string v) | _ -> ""
+            let line = match d.TryGetValue("line") with true, v when string v <> "" -> sprintf " line %s" (string v) | _ -> ""
+            sprintf "%s → %s%s%s" from' target section line
+        | "backlinks" | "links" ->
+            let from' = match d.TryGetValue("from") with true, v -> string v | _ -> ""
+            let to' = match d.TryGetValue("to") with true, v -> string v | _ -> ""
+            let target = if from' <> "" then from' else to'
+            let section = match d.TryGetValue("section") with true, v when string v <> "" -> sprintf " (in %s)" (string v) | _ -> ""
+            let text = match d.TryGetValue("text") with true, v when string v <> "" -> sprintf " \"%s\"" (string v) | _ -> ""
+            sprintf "%s%s%s" target section text
+        | "novelty" ->
+            let para = match d.TryGetValue("paragraph") with true, v -> string v | _ -> ""
+            let status = match d.TryGetValue("status") with true, v -> string v | _ -> ""
+            let score = fmtScore d
+            let closest = match d.TryGetValue("closestSection") with true, v when string v <> "" -> sprintf " → %s" (string v) | _ -> ""
+            sprintf "[%s] %s%s%s" status score para closest
+        | "cluster" ->
+            let folder = match d.TryGetValue("suggestedFolder") with true, v -> string v | _ -> ""
+            let docs = match d.TryGetValue("docs") with true, v -> string v | _ -> ""
+            sprintf "%s  (%s)" folder docs
+        | _ ->
+            // Fallback: use shape-based detection
+            let id = match d.TryGetValue("id") with true, v -> string v | _ -> ""
+            let heading = match d.TryGetValue("heading") with true, v -> string v | _ -> ""
+            let file = match d.TryGetValue("file") with true, v -> string v | _ -> ""
+            let line = match d.TryGetValue("line") with true, v -> string v | _ -> ""
+            let score = fmtScore d
+            let summary = match d.TryGetValue("summary") with true, v -> string v | _ -> ""
+            let content = match d.TryGetValue("content") with true, v -> string v | _ -> ""
+            let matchLine = match d.TryGetValue("matchLine") with true, v when string v <> "" -> sprintf "\n       ▸ %s" (string v) | _ -> ""
+            let tags = match d.TryGetValue("tags") with true, v when string v <> "" -> sprintf " [%s]" (string v) | _ -> ""
+            if content <> "" then
+                sprintf "[%s] %s (%s:%s)%s\n%s" id heading file line tags content
+            elif id <> "" then
+                sprintf "[%s] %s%s (%s:%s)\n       %s%s%s" id score heading file line summary matchLine tags
+            elif file <> "" then
+                let title = match d.TryGetValue("title") with true, v when string v <> "" -> sprintf " — %s" (string v) | _ -> ""
+                let sections = match d.TryGetValue("sections") with true, v -> sprintf " (%s sections)" (string v) | _ -> ""
+                sprintf "%s%s%s" file title sections
+            else
+                let from' = match d.TryGetValue("from") with true, v -> string v | _ -> ""
+                let target = match d.TryGetValue("target") with true, v -> string v | _ -> ""
+                if from' <> "" && target <> "" then
+                    let section = match d.TryGetValue("section") with true, v when string v <> "" -> sprintf " (in %s)" (string v) | _ -> ""
+                    sprintf "%s → %s%s" from' target section
+                else
+                    d |> Seq.filter (fun kv -> kv.Key <> sourceKey)
+                    |> Seq.map (fun kv -> sprintf "%s=%s" kv.Key (formatValue kv.Value)) |> String.concat ", " |> sprintf "{%s}"
+
+    and formatValue (v: obj) : string =
         match v with
         | :? (IDictionary<string, obj>) as d ->
             let lines = ResizeArray<string>()
@@ -17,7 +102,7 @@ module Format =
                 let heading = match d.TryGetValue("heading") with true, v -> string v | _ -> ""
                 let file = match d.TryGetValue("file") with true, v -> string v | _ -> ""
                 let line = match d.TryGetValue("line") with true, v -> string v | _ -> ""
-                let score = match d.TryGetValue("score") with true, v -> sprintf "%.2f  " (unbox<float> v) | _ -> ""
+                let score = fmtScore d
                 let summary = match d.TryGetValue("summary") with true, v -> string v | _ -> ""
                 let content = match d.TryGetValue("content") with true, v -> string v | _ -> ""
                 let matchLine = match d.TryGetValue("matchLine") with true, v when string v <> "" -> sprintf "\n       ▸ %s" (string v) | _ -> ""
@@ -30,33 +115,12 @@ module Format =
                     lines.Add(sprintf "[%s] %s%s (%s:%s)\n       %s%s%s" id score heading file line summary matchLine tags)
                 else
                     for kv in d do
-                        lines.Add(sprintf "%s: %s" kv.Key (formatValue kv.Value))
+                        if kv.Key <> sourceKey then
+                            lines.Add(sprintf "%s: %s" kv.Key (formatValue kv.Value))
             lines |> String.concat "\n"
 
         | :? (obj[]) as arr when arr.Length > 0 && (arr.[0] :? IDictionary<string, obj>) ->
-            arr |> Array.map (fun item ->
-                let d = item :?> IDictionary<string, obj>
-                // Catalog format (like modules in code-sight)
-                match d.TryGetValue("directory") with
-                | true, dir ->
-                    let docs = match d.TryGetValue("docs") with true, v -> string v | _ -> "?"
-                    let sections = match d.TryGetValue("sections") with true, v -> string v | _ -> "?"
-                    let tags = match d.TryGetValue("topTags") with true, v when string v <> "" -> sprintf "\n    Tags: %s" (string v) | _ -> ""
-                    let titles = match d.TryGetValue("titles") with true, v when string v <> "" -> sprintf "\n    %s" (string v) | _ -> ""
-                    sprintf "%-30s %s docs, %s sections%s%s" (string dir) docs sections tags titles
-                | _ ->
-                let id = match d.TryGetValue("id") with true, v -> string v | _ -> ""
-                let heading = match d.TryGetValue("heading") with true, v -> string v | _ -> ""
-                let file = match d.TryGetValue("file") with true, v -> string v | _ -> ""
-                let line = match d.TryGetValue("line") with true, v -> string v | _ -> ""
-                let score = match d.TryGetValue("score") with true, v -> sprintf "%.2f  " (unbox<float> v) | _ -> ""
-                let summary = match d.TryGetValue("summary") with true, v -> string v | _ -> ""
-                let matchLine = match d.TryGetValue("matchLine") with true, v when string v <> "" -> sprintf "\n       ▸ %s" (string v) | _ -> ""
-                let tags = match d.TryGetValue("tags") with true, v when string v <> "" -> sprintf " [%s]" (string v) | _ -> ""
-                if id <> "" then sprintf "[%s] %s%s (%s:%s)\n       %s%s%s" id score heading file line summary matchLine tags
-                elif file <> "" then sprintf "%s (score: %s) %s" file score heading
-                else
-                    d |> Seq.map (fun kv -> sprintf "%s=%s" kv.Key (formatValue kv.Value)) |> String.concat ", " |> sprintf "{%s}")
+            arr |> Array.map (fun item -> formatItem (item :?> IDictionary<string, obj>))
             |> String.concat "\n"
 
         | :? (obj[]) as arr when arr.Length > 0 && (arr.[0] :? string) -> arr |> Array.map string |> String.concat "\n"
