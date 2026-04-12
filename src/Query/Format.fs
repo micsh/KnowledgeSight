@@ -77,19 +77,11 @@ module Format =
                 sprintf "[%s] %s (%s:%s)%s\n%s" id heading file line tags content
             elif id <> "" then
                 sprintf "[%s] %s%s (%s:%s)\n       %s%s%s" id score heading file line summary matchLine tags
-            elif file <> "" then
-                let title = match d.TryGetValue("title") with true, v when string v <> "" -> sprintf " — %s" (string v) | _ -> ""
-                let sections = match d.TryGetValue("sections") with true, v -> sprintf " (%s sections)" (string v) | _ -> ""
-                sprintf "%s%s%s" file title sections
             else
-                let from' = match d.TryGetValue("from") with true, v -> string v | _ -> ""
-                let target = match d.TryGetValue("target") with true, v -> string v | _ -> ""
-                if from' <> "" && target <> "" then
-                    let section = match d.TryGetValue("section") with true, v when string v <> "" -> sprintf " (in %s)" (string v) | _ -> ""
-                    sprintf "%s → %s%s" from' target section
-                else
-                    d |> Seq.filter (fun kv -> kv.Key <> sourceKey)
-                    |> Seq.map (fun kv -> sprintf "%s=%s" kv.Key (formatValue kv.Value)) |> String.concat ", " |> sprintf "{%s}"
+                // No recognized shape — preserve all fields
+                d |> Seq.filter (fun kv -> kv.Key <> sourceKey)
+                |> Seq.map (fun kv -> sprintf "%s: %s" kv.Key (formatValue kv.Value))
+                |> String.concat " | "
 
     and formatValue (v: obj) : string =
         match v with
