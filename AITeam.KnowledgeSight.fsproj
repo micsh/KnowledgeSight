@@ -5,6 +5,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>knowledge-sight</AssemblyName>
     <RootNamespace>AITeam.KnowledgeSight</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,9 +30,6 @@
     <Compile Include="Program.fs" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="playbooks\**\*.md" CopyToOutputDirectory="PreserveNewest" LinkBase="playbooks" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Update="FSharp.Core" Version="10.1.201" />
