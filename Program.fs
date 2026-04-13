@@ -8,8 +8,8 @@ let printUsage () =
     printfn "Usage:"
     printfn "  knowledge-sight index [--repo <path>]                Build/update index"
     printfn "  knowledge-sight catalog [--repo <path>]              Show topic map"
-    printfn "  knowledge-sight search <js> [--repo <path>]          Run a query"
-    printfn "  knowledge-sight eval <js> [--repo <path>]            Alias for search"
+    printfn "  knowledge-sight search <js> [--json] [--repo <path>]  Run a query"
+    printfn "  knowledge-sight eval <js> [--json] [--repo <path>]    Alias for search"
     printfn "  knowledge-sight orphans [--repo <path>]              Find unlinked docs"
     printfn "  knowledge-sight broken [--repo <path>]               Find broken links"
     printfn "  knowledge-sight stale [--repo <path>]                Find docs drifting from source"
@@ -138,6 +138,11 @@ let parseArgs (args: string[]) =
             command <- "search"
             query <- args.[i + 1]
             i <- i + 2
+            while i < args.Length do
+                match args.[i] with
+                | "--json" -> jsonOut <- true; i <- i + 1
+                | "--repo" when i + 1 < args.Length -> repo <- args.[i + 1]; i <- i + 2
+                | _ -> i <- i + 1
         | s when command = "" && not (s.StartsWith("--")) ->
             command <- "search"
             query <- s
@@ -535,7 +540,9 @@ let main args =
         | Some index ->
             let chunks = IndexStore.loadSourceChunks cfg.IndexDir
             let engine = QueryEngine.create index chunks cfg.EmbeddingUrl cfg.IndexDir cfg.RepoRoot
-            let result = QueryEngine.eval engine query
+            let result =
+                if jsonOut then QueryEngine.evalJson engine query
+                else QueryEngine.eval engine query
             printfn "%s" result
             0
 

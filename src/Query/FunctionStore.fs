@@ -60,7 +60,16 @@ module FunctionStore =
                 doc.RootElement.EnumerateArray()
                 |> Seq.map (fun (el: JsonElement) ->
                     let str (p: string) d = match el.TryGetProperty(p) with true, v -> v.GetString() | _ -> d
-                    let arr (p: string) = match el.TryGetProperty(p) with true, v -> v.EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> Seq.toArray | _ -> [||]
+                    let arr (p: string) =
+                        match el.TryGetProperty(p) with
+                        | true, v when v.ValueKind = JsonValueKind.Array ->
+                            v.EnumerateArray() |> Seq.map (fun x -> x.GetString()) |> Seq.toArray
+                        | true, v when v.ValueKind = JsonValueKind.Object ->
+                            let keys = v.EnumerateObject() |> Seq.map (fun x -> x.Name) |> Seq.toArray
+                            if keys.Length > 0 then
+                                eprintfn "Warning: 'params' should be an array [\"a\",\"b\"], not an object. Using keys as param names."
+                            keys
+                        | _ -> [||]
                     { Name = str "name" ""
                       Params = arr "params"
                       Body = str "body" ""

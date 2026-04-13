@@ -188,32 +188,33 @@ module QueryEngine =
 
         engine
 
-    /// Evaluate JS with IIFE wrapping.
+    /// Wrap JS in an IIFE for evaluation.
+    let private wrapIIFE (js: string) =
+        let stripped = js.Split('\n') |> Array.map (fun line ->
+            let commentIdx = line.IndexOf("//")
+            if commentIdx >= 0 then line.Substring(0, commentIdx) else line) |> String.concat "\n"
+        let trimmed = stripped.Trim()
+        if trimmed.StartsWith("(") && trimmed.EndsWith(")") then trimmed
+        else
+            let lines = trimmed.Split('\n') |> Array.map (fun s -> s.Trim()) |> Array.filter (fun s -> s <> "")
+            let joined = lines |> String.concat " "
+            let lastSemi = joined.LastIndexOf(';')
+            if lastSemi > 0 && lastSemi < joined.Length - 2 then
+                let stmts = joined.Substring(0, lastSemi + 1)
+                let expr = joined.Substring(lastSemi + 1).Trim()
+                if expr.Length > 0 then
+                    sprintf "(function() { %s return %s; })()" stmts expr
+                else
+                    sprintf "(function() { return %s; })()" joined
+            elif joined.StartsWith("let ") || joined.StartsWith("const ") || joined.StartsWith("var ") then
+                sprintf "(function() { %s })()" joined
+            else
+                sprintf "(function() { return %s; })()" joined
+
+    /// Evaluate JS with IIFE wrapping — human-readable formatted output.
     let eval (engine: Engine) (js: string) : string =
         try
-            // Strip JS single-line comments
-            let stripped = js.Split('\n') |> Array.map (fun line ->
-                let commentIdx = line.IndexOf("//")
-                if commentIdx >= 0 then line.Substring(0, commentIdx) else line) |> String.concat "\n"
-            let trimmed = stripped.Trim()
-            let toEval =
-                if trimmed.StartsWith("(") && trimmed.EndsWith(")") then trimmed
-                else
-                    let lines = trimmed.Split('\n') |> Array.map (fun s -> s.Trim()) |> Array.filter (fun s -> s <> "")
-                    let joined = lines |> String.concat " "
-                    let lastSemi = joined.LastIndexOf(';')
-                    if lastSemi > 0 && lastSemi < joined.Length - 2 then
-                        let stmts = joined.Substring(0, lastSemi + 1)
-                        let expr = joined.Substring(lastSemi + 1).Trim()
-                        if expr.Length > 0 then
-                            sprintf "(function() { %s return %s; })()" stmts expr
-                        else
-                            sprintf "(function() { return %s; })()" joined
-                    elif joined.StartsWith("let ") || joined.StartsWith("const ") || joined.StartsWith("var ") then
-                        sprintf "(function() { %s })()" joined
-                    else
-                        sprintf "(function() { return %s; })()" joined
-
+            let toEval = wrapIIFE js
             engine.SetValue("__result__", engine.Evaluate(toEval)) |> ignore
             let jsonResult = engine.Evaluate("typeof __result__ === 'string' ? __result__ : JSON.stringify(__result__, null, 2)")
             let text = jsonResult.AsString()
@@ -224,3 +225,14 @@ module QueryEngine =
                 try Format.formatValue native
                 with _ -> text
         with ex -> sprintf "Error: %s" ex.Message
+
+    /// Evaluate JS with IIFE wrapping — raw JSON output for machine consumption.
+    let evalJson (engine: Engine) (js: string) : string =
+        try
+            let toEval = wrapIIFE js
+            engine.SetValue("__result__", engine.Evaluate(toEval)) |> ignore
+            let jsonResult = engine.Evaluate("typeof __result__ === 'string' ? __result__ : JSON.stringify(__result__, null, 2)")
+            jsonResult.AsString()
+        with ex ->
+            let escaped = ex.Message.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", " ")
+            sprintf """{"error":"%s"}""" escaped
