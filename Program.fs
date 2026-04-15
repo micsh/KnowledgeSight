@@ -16,6 +16,7 @@ let printUsage () =
     printfn "  knowledge-sight catalog [--repo <path>]              Show topic map"
     printfn "  knowledge-sight search <js> [--json] [--repo <path>]  Run a query"
     printfn "  knowledge-sight eval <js> [--json] [--repo <path>]    Alias for search"
+    printfn "  knowledge-sight eval - [--json] [--repo <path>]       Read expression from stdin"
     printfn "  knowledge-sight orphans [--repo <path>]              Find unlinked docs"
     printfn "  knowledge-sight broken [--repo <path>]               Find broken links"
     printfn "  knowledge-sight stale [--repo <path>]                Find docs drifting from source"
@@ -63,8 +64,9 @@ let printUsage () =
     printfn "  mergeBy(key, arr1, arr2, ...)        Union arrays with dedup by key"
     printfn "  print(value)                         Debug output to stderr"
     printfn ""
-    printfn "Note: UDFs are available in search/eval and check --expr. Other commands"
-    printfn "  (orphans, broken, catalog, etc.) use the same primitives available via search."
+    printfn "Note: All primitives above (including orphans, broken) are available in"
+    printfn "  search/eval expressions and check --expr. The CLI commands (e.g. 'knowledge-sight"
+    printfn "  orphans') are shortcuts that call the same primitives."
     printfn ""
 
 let parseArgs (args: string[]) =
@@ -546,9 +548,14 @@ let main args =
         | Some index ->
             let chunks = IndexStore.loadSourceChunks cfg.IndexDir
             let engine = QueryEngine.create index chunks cfg.EmbeddingUrl cfg.IndexDir cfg.RepoRoot
+            let actualQuery =
+                if query = "-" then
+                    use reader = new StreamReader(Console.OpenStandardInput())
+                    reader.ReadToEnd().Trim()
+                else query
             let result =
-                if jsonOut then QueryEngine.evalJson engine query
-                else QueryEngine.eval engine query
+                if jsonOut then QueryEngine.evalJson engine actualQuery
+                else QueryEngine.eval engine actualQuery
             printfn "%s" result
             0
 

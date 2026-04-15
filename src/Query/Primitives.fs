@@ -82,7 +82,7 @@ module Primitives =
     let search (index: DocIndex) (session: QuerySession) (chunks: DocChunk[] option) (embeddingUrl: string)
                (query: string) (limit: int) (tag: string) (filePattern: string) =
         match embedQuery embeddingUrl query with
-        | None -> [||]
+        | None -> [| mdict [ "error", box "embedding server not available — search requires embeddings" ] |]
         | Some qEmb ->
             IndexStore.search index qEmb (limit * 3)
             |> Array.filter (fun (i, _) ->
@@ -176,7 +176,7 @@ module Primitives =
 
     let similar (index: DocIndex) (session: QuerySession) (refId: string) (limit: int) =
         match session.GetRef(refId) with
-        | None -> [||]
+        | None -> [| mdict [ "error", box (sprintf "ref %s not found" refId) ] |]
         | Some chunkIdx ->
             IndexStore.similar index chunkIdx limit
             |> Array.map (fun (i, sim) ->
@@ -190,7 +190,7 @@ module Primitives =
 
     let grep (index: DocIndex) (session: QuerySession) (chunks: DocChunk[] option) (pattern: string) (limit: int) (filePattern: string) =
         match chunks with
-        | None -> [||]
+        | None -> [| mdict [ "error", box "source chunks not loaded — run 'knowledge-sight index' first" ] |]
         | Some allChunks ->
             let regex = try Regex(pattern, RegexOptions.IgnoreCase ||| RegexOptions.Compiled) with _ -> Regex(Regex.Escape(pattern), RegexOptions.IgnoreCase ||| RegexOptions.Compiled)
             let results = ResizeArray()
@@ -212,7 +212,7 @@ module Primitives =
 
     let mentions (index: DocIndex) (session: QuerySession) (chunks: DocChunk[] option) (term: string) (limit: int) =
         match chunks with
-        | None -> [||]
+        | None -> [| mdict [ "error", box "source chunks not loaded — run 'knowledge-sight index' first" ] |]
         | Some allChunks ->
             let regex = Regex(sprintf @"\b%s\b" (Regex.Escape term), RegexOptions.IgnoreCase ||| RegexOptions.Compiled)
             let results = ResizeArray()
@@ -290,7 +290,7 @@ module Primitives =
 
     let placement (index: DocIndex) (embeddingUrl: string) (content: string) (limit: int) =
         match embedQuery embeddingUrl content with
-        | None -> [||]
+        | None -> [| mdict [ "error", box "embedding server not available — placement requires embeddings" ] |]
         | Some qEmb ->
             // Find most similar sections, then group by file to suggest placement
             let hits = IndexStore.search index qEmb (limit * 3)
