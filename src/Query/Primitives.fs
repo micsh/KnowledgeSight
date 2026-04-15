@@ -139,7 +139,7 @@ module Primitives =
     let context (index: DocIndex) (session: QuerySession) (fileName: string) =
         // Detect ambiguous filename matches
         let matchingFiles =
-            index.Chunks |> Array.map (fun c -> c.FilePath)
+            index.Chunks |> Array.map (fun c -> c.FilePath.Replace("\\", "/"))
             |> Array.distinct
             |> Array.filter (fun fp -> IndexStore.matchFile fp fileName)
         if matchingFiles.Length > 1 then
