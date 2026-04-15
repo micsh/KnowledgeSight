@@ -2,3 +2,6 @@ bin/
 obj/
 .vs/
 *.user
+.knowledge-sight/
+.memory-project/
+.code-intel/
