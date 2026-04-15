@@ -47,6 +47,7 @@ The tool expects a local embedding server at `http://localhost:1234/v1/embedding
 | `catalog [--repo <path>]` | Show a topic map of all indexed docs |
 | `search <expr> [--repo <path>]` | Run a query expression |
 | `eval <expr> [--repo <path>]` | Alias for `search` (semantic clarity for non-search expressions) |
+| `repl [--repo <path>]` | Interactive REPL for queries |
 | `orphans [--repo <path>]` | Find docs with no incoming links |
 | `broken [--repo <path>]` | Find broken links across docs |
 | `stale [--repo <path>]` | Find docs drifting from source code |
@@ -120,10 +121,20 @@ mergeBy('id', search('auth'), grep('authentication'))
 | `novelty(text, {threshold})` | Detect novel knowledge in text |
 | `cluster(dir, {threshold})` | Cluster docs by similarity |
 | `gaps({scope, min_docs, signal})` | Find coverage gaps |
+| `changed(gitRef)` | Chunks in files changed since a git ref |
+| `explain(refId)` | Full index metadata + findSource diagnosis |
+
+### Session Primitives
+
+| Primitive | Description |
+|-----------|-------------|
+| `saveSession(name)` | Save current ref IDs and results to `{indexDir}/sessions/{name}.json` |
+| `loadSession(name)` | Restore a previously saved session |
+| `sessions()` | List all saved sessions |
 
 ### Refs
 
-Search results are assigned ref IDs (`R1`, `R2`, ...) that persist across queries. Use `expand(R1)` or `similar(R1)` to drill into previous results.
+Search results are assigned ref IDs (`R1`, `R2`, ...) that persist across queries. Use `expand(R1)` or `similar(R1)` to drill into previous results. Bare `R123` tokens are auto-quoted to `'R123'` before evaluation (ref-ID shorthand).
 
 ## Functions
 
@@ -248,4 +259,7 @@ related:
 - **bridge(entity)** — Cross-index join between code-sight and knowledge-sight refs. E.g., find code refs for a doc entity or doc coverage for a code symbol.
 - **why(refId)** — Reverse-lookup from code chunk to ADR/decision docs that mention the entity.
 - **propose(text)** — Close the write loop: novelty → placement → draft section → PR/diff.
-- **trace(fromRef, toRef)** — BFS path query over the dependency graph between two symbols.
+
+## Source
+
+[github.com/micsh/KnowledgeSight](https://github.com/micsh/KnowledgeSight)
