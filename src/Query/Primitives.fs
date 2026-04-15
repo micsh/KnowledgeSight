@@ -45,11 +45,14 @@ module Primitives =
         |> Async.AwaitTask |> Async.RunSynchronously
         |> Option.map (fun e -> e.[0])
 
+    /// Normalize path separators for cross-platform comparison.
+    let private normPath (p: string) = p.Replace('\\', '/')
+
     /// Find source chunk matching an index entry.
     let private findSource (chunks: DocChunk[] option) (c: ChunkEntry) =
         chunks |> Option.bind (fun chs ->
             chs |> Array.tryFind (fun ch ->
-                ch.FilePath = c.FilePath && ch.Heading = c.Heading && ch.StartLine = c.StartLine))
+                normPath ch.FilePath = normPath c.FilePath && ch.Heading = c.Heading && ch.StartLine = c.StartLine))
 
     // ── catalog (like modules in code-sight) ──
 
@@ -99,6 +102,15 @@ module Primitives =
     // ── context ──
 
     let context (index: DocIndex) (session: QuerySession) (fileName: string) =
+        // Detect ambiguous filename matches
+        let matchingFiles =
+            index.Chunks |> Array.map (fun c -> c.FilePath)
+            |> Array.distinct
+            |> Array.filter (fun fp -> IndexStore.matchFile fp fileName)
+        if matchingFiles.Length > 1 then
+            let listing = matchingFiles |> Array.map (fun f -> sprintf "  %s" f) |> String.concat "\n"
+            mdict [ "error", box (sprintf "'%s' is ambiguous (%d matches):\n%s\nUse a more specific path, e.g. context('%s')" fileName matchingFiles.Length listing matchingFiles.[0]) ]
+        else
         let fileChunks = IndexStore.fileChunks index fileName
         let backlinks = IndexStore.backlinks index fileName
         let outlinks = IndexStore.outlinks index fileName

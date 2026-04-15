@@ -10,6 +10,48 @@ module QueryEngine =
 
     let private sourceKey = "__ks_source__"
 
+    /// Extract a string property from a JS options object, handling JsObject / ObjectInstance / JsValue.
+    let private jsStr (opts: obj) (key: string) (def: string) =
+        match opts with
+        | :? Jint.Native.JsValue as v when v.IsObject() ->
+            let o = v.AsObject()
+            let prop = o.Get(key)
+            if prop.IsUndefined() || prop.IsNull() then def else prop.AsString()
+        | :? System.Dynamic.ExpandoObject as eo ->
+            let dict = eo :> IDictionary<string, obj>
+            match dict.TryGetValue(key) with
+            | true, v when not (isNull v) -> string v
+            | _ -> def
+        | _ -> def
+
+    /// Extract an int property from a JS options object.
+    let private jsInt (opts: obj) (key: string) (def: int) =
+        match opts with
+        | :? Jint.Native.JsValue as v when v.IsObject() ->
+            let o = v.AsObject()
+            let prop = o.Get(key)
+            if prop.IsUndefined() || prop.IsNull() then def else int (prop.AsNumber())
+        | :? System.Dynamic.ExpandoObject as eo ->
+            let dict = eo :> IDictionary<string, obj>
+            match dict.TryGetValue(key) with
+            | true, v when not (isNull v) -> int (System.Convert.ToDouble(v))
+            | _ -> def
+        | _ -> def
+
+    /// Extract a float property from a JS options object.
+    let private jsFloat (opts: obj) (key: string) (def: float) =
+        match opts with
+        | :? Jint.Native.JsValue as v when v.IsObject() ->
+            let o = v.AsObject()
+            let prop = o.Get(key)
+            if prop.IsUndefined() || prop.IsNull() then def else prop.AsNumber()
+        | :? System.Dynamic.ExpandoObject as eo ->
+            let dict = eo :> IDictionary<string, obj>
+            match dict.TryGetValue(key) with
+            | true, v when not (isNull v) -> System.Convert.ToDouble(v)
+            | _ -> def
+        | _ -> def
+
     /// Stamp each result item with its source primitive name for format disambiguation.
     let private stamp (source: string) (results: Dictionary<string, obj>[]) =
         for d in results do d.[sourceKey] <- box source
@@ -28,14 +70,9 @@ module QueryEngine =
 
         // search
         engine.SetValue("search", Func<string, obj, obj>(fun query opts ->
-            let limit, tag, file =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    let l = match o.Get("limit") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 5
-                    let t = match o.Get("tag") with v when not (v.IsUndefined()) && not (v.IsNull()) -> v.AsString() | _ -> ""
-                    let f = match o.Get("file") with v when not (v.IsUndefined()) && not (v.IsNull()) -> v.AsString() | _ -> ""
-                    l, t, f
-                | _ -> 5, "", ""
+            let limit = jsInt opts "limit" 5
+            let tag = jsStr opts "tag" ""
+            let file = jsStr opts "file" ""
             box (stamp "search" (Primitives.search index session chunks embeddingUrl query limit tag file)))) |> ignore
 
         // context
@@ -46,42 +83,24 @@ module QueryEngine =
 
         // neighborhood
         engine.SetValue("neighborhood", Func<string, obj, obj>(fun id opts ->
-            let before, after =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    let b = match o.Get("before") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 3
-                    let a = match o.Get("after") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 3
-                    b, a
-                | _ -> 3, 3
+            let before = jsInt opts "before" 3
+            let after = jsInt opts "after" 3
             box (stamp1 "neighborhood" (Primitives.neighborhood index session chunks id before after)))) |> ignore
 
         // similar
         engine.SetValue("similar", Func<string, obj, obj>(fun id opts ->
-            let limit =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    match o.Get("limit") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 5
-                | _ -> 5
+            let limit = jsInt opts "limit" 5
             box (stamp "similar" (Primitives.similar index session id limit)))) |> ignore
 
         // grep
         engine.SetValue("grep", Func<string, obj, obj>(fun pattern opts ->
-            let limit, file =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    let l = match o.Get("limit") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 10
-                    let f = match o.Get("file") with v when not (v.IsUndefined()) && not (v.IsNull()) -> v.AsString() | _ -> ""
-                    l, f
-                | _ -> 10, ""
+            let limit = jsInt opts "limit" 10
+            let file = jsStr opts "file" ""
             box (stamp "grep" (Primitives.grep index session chunks pattern limit file)))) |> ignore
 
         // mentions
         engine.SetValue("mentions", Func<string, obj, obj>(fun term opts ->
-            let limit =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    match o.Get("limit") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 20
-                | _ -> 20
+            let limit = jsInt opts "limit" 20
             box (stamp "mentions" (Primitives.mentions index session chunks term limit)))) |> ignore
 
         // files
@@ -101,40 +120,23 @@ module QueryEngine =
 
         // placement
         engine.SetValue("placement", Func<string, obj, obj>(fun content opts ->
-            let limit =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    match o.Get("limit") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 3
-                | _ -> 3
+            let limit = jsInt opts "limit" 3
             box (stamp "placement" (Primitives.placement index embeddingUrl content limit)))) |> ignore
 
         // walk
         engine.SetValue("walk", Func<string, obj, obj>(fun file opts ->
-            let depth, direction =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    let d = match o.Get("depth") with v when not (v.IsUndefined()) -> int (v.AsNumber()) | _ -> 2
-                    let dir = match o.Get("direction") with v when not (v.IsUndefined()) && not (v.IsNull()) -> v.AsString() | _ -> "out"
-                    d, dir
-                | _ -> 2, "out"
+            let depth = jsInt opts "depth" 2
+            let direction = jsStr opts "direction" "out"
             box (stamp "walk" (Primitives.walk index session file depth direction)))) |> ignore
 
         // novelty
         engine.SetValue("novelty", Func<string, obj, obj>(fun text opts ->
-            let threshold =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    match o.Get("threshold") with v when not (v.IsUndefined()) -> v.AsNumber() | _ -> 0.75
-                | _ -> 0.75
+            let threshold = jsFloat opts "threshold" 0.75
             box (stamp "novelty" (Primitives.novelty index embeddingUrl text threshold)))) |> ignore
 
         // cluster
         engine.SetValue("cluster", Func<string, obj, obj>(fun dir opts ->
-            let threshold =
-                match opts with
-                | :? Jint.Native.JsObject as o ->
-                    match o.Get("threshold") with v when not (v.IsUndefined()) -> v.AsNumber() | _ -> 0.7
-                | _ -> 0.7
+            let threshold = jsFloat opts "threshold" 0.7
             box (stamp "cluster" (Primitives.cluster index dir threshold)))) |> ignore
 
         // gaps — use JsValue to avoid Jint's ToObject() conversion

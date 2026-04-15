@@ -96,7 +96,13 @@ module MarkdownChunker =
             let trimmed = line.Trim()
             if trimmed.Length > maxLen then trimmed.Substring(0, maxLen) + "..."
             else trimmed
-        | None -> "(no summary)"
+        | None ->
+            // Fallback: first ~maxLen chars of raw content, cleaned up
+            let raw = content.Replace('\n', ' ').Replace('\r', ' ').Trim()
+            let stripped = Regex.Replace(raw, @"^#+\s*", "").Trim()
+            if stripped.Length = 0 then "(no summary)"
+            elif stripped.Length > maxLen then stripped.Substring(0, maxLen) + "..."
+            else stripped
 
     /// Chunk a single markdown file into sections.
     let chunkFile (filePath: string) : DocChunk[] * Frontmatter option * DocLink[] =
