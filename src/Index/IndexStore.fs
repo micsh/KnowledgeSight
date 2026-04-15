@@ -7,14 +7,23 @@ open System.Numerics.Tensors
 /// Index persistence and query operations.
 module IndexStore =
 
+    /// Deterministic chunk identifier from key fields. Survives reindex as long as the chunk's position is stable.
+    let chunkId (filePath: string) (heading: string) (startLine: int) =
+        let input = sprintf "%s|%s|%d" (filePath.Replace('\\', '/')) heading startLine
+        let bytes = System.Text.Encoding.UTF8.GetBytes(input)
+        let hash = System.Security.Cryptography.SHA256.HashData(bytes)
+        let hex = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant()
+        hex.Substring(0, 12)
+
     // ── Source chunk cache ──
 
     let saveSourceChunks (dir: string) (chunks: DocChunk[]) =
         let path = Path.Combine(dir, "source-chunks.jsonl")
         use writer = new StreamWriter(path)
         for c in chunks do
+            let cid = chunkId c.FilePath c.Heading c.StartLine
             let json = System.Text.Json.JsonSerializer.Serialize({|
-                filePath = c.FilePath; heading = c.Heading; headingPath = c.HeadingPath
+                cid = cid; filePath = c.FilePath; heading = c.Heading; headingPath = c.HeadingPath
                 level = c.Level; startLine = c.StartLine; endLine = c.EndLine
                 content = c.Content; summary = c.Summary
                 tags = c.Tags; outLinks = c.OutLinks |})

@@ -54,6 +54,7 @@ let printUsage () =
     printfn "  broken()                             Broken links across docs"
     printfn "  placement(content, {limit})          Suggest where new content fits"
     printfn "  walk(file, {depth, direction})       Traverse the link graph"
+    printfn "  changed(gitRef)                      Chunks in files changed since a git ref"
     printfn "  novelty(text, {threshold})           Detect novel knowledge in text"
     printfn "  cluster(dir, {threshold})            Cluster docs by similarity"
     printfn "  gaps({scope, min_docs, signal})      Find coverage gaps"

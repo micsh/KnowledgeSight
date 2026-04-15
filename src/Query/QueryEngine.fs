@@ -153,6 +153,10 @@ module QueryEngine =
                 else "", 1, ""
             box (stamp "gaps" (Primitives.gaps index chunks scope minDocs signal)))) |> ignore
 
+        // changed
+        engine.SetValue("changed", Func<string, obj>(fun gitRef ->
+            box (stamp "changed" (Primitives.changed index session repoRoot gitRef)))) |> ignore
+
         // Composition helpers
         engine.SetValue("print", Action<obj>(fun v ->
             eprintfn "%s" (Format.formatValue v))) |> ignore

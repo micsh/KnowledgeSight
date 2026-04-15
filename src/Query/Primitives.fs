@@ -48,11 +48,15 @@ module Primitives =
     /// Normalize path separators for cross-platform comparison.
     let private normPath (p: string) = p.Replace('\\', '/')
 
-    /// Find source chunk matching an index entry.
+    /// Find source chunk matching an index entry. Uses stable chunk ID as primary key.
     let private findSource (chunks: DocChunk[] option) (c: ChunkEntry) =
         chunks |> Option.bind (fun chs ->
-            chs |> Array.tryFind (fun ch ->
-                normPath ch.FilePath = normPath c.FilePath && ch.Heading = c.Heading && ch.StartLine = c.StartLine))
+            let targetCid = IndexStore.chunkId c.FilePath c.Heading c.StartLine
+            match chs |> Array.tryFind (fun ch -> IndexStore.chunkId ch.FilePath ch.Heading ch.StartLine = targetCid) with
+            | Some _ as hit -> hit
+            | None ->
+                chs |> Array.tryFind (fun ch ->
+                    normPath ch.FilePath = normPath c.FilePath && ch.Heading = c.Heading && ch.StartLine = c.StartLine))
 
     // ── catalog (like modules in code-sight) ──
 
@@ -693,3 +697,37 @@ module Primitives =
                     mdict [ "suggestedFolder", box nameHint
                             "docs", box members.Length
                             "files", box (members |> String.concat ", ") ])
+
+    // ── changed ──
+
+    /// changed(gitRef) — find chunks in files that changed since a git ref.
+    let changed (index: DocIndex) (session: QuerySession) (repoRoot: string) (gitRef: string) =
+        try
+            let psi = System.Diagnostics.ProcessStartInfo("git", sprintf "diff --name-only %s" gitRef)
+            psi.WorkingDirectory <- repoRoot
+            psi.RedirectStandardOutput <- true
+            psi.RedirectStandardError <- true
+            psi.UseShellExecute <- false
+            psi.CreateNoWindow <- true
+            use proc = System.Diagnostics.Process.Start(psi)
+            let output = proc.StandardOutput.ReadToEnd()
+            proc.WaitForExit()
+            if proc.ExitCode <> 0 then
+                [| mdict [ "error", box (sprintf "git diff failed for ref '%s'" gitRef) ] |]
+            else
+                let changedFiles =
+                    output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    |> Array.map (fun f -> f.Trim().Replace('\\', '/'))
+                    |> Set.ofArray
+                let results = ResizeArray()
+                for i in 0..index.Chunks.Length-1 do
+                    let c = index.Chunks.[i]
+                    let normFile = c.FilePath.Replace('\\', '/')
+                    if changedFiles.Contains(normFile) then
+                        let id = session.NextRef(i)
+                        results.Add(mdict [
+                            "id", box id; "heading", box c.Heading; "file", box (Path.GetFileName c.FilePath)
+                            "path", box c.FilePath; "line", box c.StartLine; "summary", box c.Summary ])
+                results.ToArray()
+        with ex ->
+            [| mdict [ "error", box (sprintf "git not available: %s" ex.Message) ] |]
