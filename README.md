@@ -2,6 +2,20 @@
 
 Knowledge and documentation intelligence for any repo. Index your markdown docs, then query, analyze, and maintain them with a composable JS expression language.
 
+## Install
+
+**macOS / Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/micsh/KnowledgeSight/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/micsh/KnowledgeSight/main/install.ps1 | iex
+```
+
+Or download binaries directly from [Releases](https://github.com/micsh/KnowledgeSight/releases).
+
 ## Quick Start
 
 ```bash
