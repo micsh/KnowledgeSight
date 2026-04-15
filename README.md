@@ -227,3 +227,11 @@ related:
   - src/Auth/LoginHandler.fs
 ---
 ```
+
+## Future Ideas
+
+- **findings(query)** — Embedding search over accumulated session findings/insights. Needs a store of past review outputs to search against.
+- **bridge(entity)** — Cross-index join between code-sight and knowledge-sight refs. E.g., find code refs for a doc entity or doc coverage for a code symbol.
+- **why(refId)** — Reverse-lookup from code chunk to ADR/decision docs that mention the entity.
+- **propose(text)** — Close the write loop: novelty → placement → draft section → PR/diff.
+- **trace(fromRef, toRef)** — BFS path query over the dependency graph between two symbols.

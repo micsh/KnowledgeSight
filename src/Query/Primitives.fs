@@ -37,6 +37,37 @@ type QuerySession(indexDir: string) =
     member _.GetRef(id: string) =
         match refs.TryGetValue(id) with true, v -> Some v | _ -> None
 
+    member _.SaveSession(name: string) =
+        let sessDir = Path.Combine(indexDir, "sessions")
+        Directory.CreateDirectory(sessDir) |> ignore
+        let dict = Dictionary<string, int>()
+        for kv in refs do dict.[kv.Key] <- kv.Value
+        let json = System.Text.Json.JsonSerializer.Serialize(dict)
+        File.WriteAllText(Path.Combine(sessDir, name + ".json"), json)
+
+    member _.LoadSession(name: string) =
+        let sessPath = Path.Combine(indexDir, "sessions", name + ".json")
+        if File.Exists sessPath then
+            let json = File.ReadAllText(sessPath)
+            let doc = System.Text.Json.JsonDocument.Parse(json)
+            refs.Clear()
+            counter <- 0
+            for prop in doc.RootElement.EnumerateObject() do
+                refs.[prop.Name] <- prop.Value.GetInt32()
+                let num = prop.Name.Substring(1) |> int
+                if num > counter then counter <- num
+            true
+        else false
+
+    member _.ListSessions() =
+        let sessDir = Path.Combine(indexDir, "sessions")
+        if Directory.Exists sessDir then
+            Directory.GetFiles(sessDir, "*.json")
+            |> Array.map (fun f -> Path.GetFileNameWithoutExtension(f))
+        else [||]
+
+    member _.RefCount = refs.Count
+
 /// All query primitives for knowledge/doc operations.
 module Primitives =
 
@@ -731,3 +762,38 @@ module Primitives =
                 results.ToArray()
         with ex ->
             [| mdict [ "error", box (sprintf "git not available: %s" ex.Message) ] |]
+
+    // ── explain ──
+
+    /// explain(refId) — debug primitive showing index metadata and findSource diagnosis.
+    let explain (index: DocIndex) (session: QuerySession) (chunks: DocChunk[] option) (refId: string) =
+        match session.GetRef(refId) with
+        | None -> mdict [ "error", box (sprintf "ref %s not found in session" refId) ]
+        | Some idx when idx < 0 || idx >= index.Chunks.Length ->
+            mdict [ "error", box (sprintf "ref %s points to chunk %d but index has %d chunks" refId idx index.Chunks.Length) ]
+        | Some idx ->
+            let c = index.Chunks.[idx]
+            let cid = IndexStore.chunkId c.FilePath c.Heading c.StartLine
+            let sourceMatch =
+                match chunks with
+                | None -> "source chunks not loaded"
+                | Some chs ->
+                    let cidMatch = chs |> Array.tryFind (fun ch ->
+                        IndexStore.chunkId ch.FilePath ch.Heading ch.StartLine = cid)
+                    match cidMatch with
+                    | Some ch -> sprintf "CID match (%s), content length: %d" cid ch.Content.Length
+                    | None ->
+                        let tripleMatch = chs |> Array.tryFind (fun ch ->
+                            ch.FilePath = c.FilePath && ch.Heading = c.Heading && ch.StartLine = c.StartLine)
+                        match tripleMatch with
+                        | Some ch -> sprintf "triple-key match (no CID), content length: %d" ch.Content.Length
+                        | None ->
+                            let pathMatch = chs |> Array.tryFind (fun ch -> normPath ch.FilePath = normPath c.FilePath && ch.Heading = c.Heading)
+                            match pathMatch with
+                            | Some ch -> sprintf "partial match (heading+path, line differs: source=%d vs index=%d), content length: %d" ch.StartLine c.StartLine ch.Content.Length
+                            | None -> sprintf "NO MATCH — findSource will return None. CID=%s, FilePath=%s, Heading=%s, StartLine=%d" cid c.FilePath c.Heading c.StartLine
+            mdict [
+                "refId", box refId; "chunkIdx", box idx; "cid", box cid
+                "filePath", box c.FilePath; "heading", box c.Heading
+                "startLine", box c.StartLine; "endLine", box c.EndLine
+                "summary", box c.Summary; "sourceMatch", box sourceMatch ]

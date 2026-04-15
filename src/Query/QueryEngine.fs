@@ -3,6 +3,7 @@ namespace AITeam.KnowledgeSight
 open System
 open System.Collections.Generic
 open System.IO
+open System.Text.RegularExpressions
 open Jint
 
 /// Jint-based query engine. Wires all primitives, evaluates JS, formats results.
@@ -157,6 +158,22 @@ module QueryEngine =
         engine.SetValue("changed", Func<string, obj>(fun gitRef ->
             box (stamp "changed" (Primitives.changed index session repoRoot gitRef)))) |> ignore
 
+        // explain
+        engine.SetValue("explain", Func<string, obj>(fun refId ->
+            box (stamp1 "explain" (Primitives.explain index session chunks refId)))) |> ignore
+
+        // session save/load/list
+        engine.SetValue("saveSession", Func<string, obj>(fun name ->
+            session.SaveSession(name)
+            box (mdict [ "saved", box name; "refs", box session.RefCount ]))) |> ignore
+        engine.SetValue("loadSession", Func<string, obj>(fun name ->
+            if session.LoadSession(name) then
+                box (mdict [ "loaded", box name; "refs", box session.RefCount ])
+            else
+                box (mdict [ "error", box (sprintf "session '%s' not found" name) ]))) |> ignore
+        engine.SetValue("sessions", Func<obj>(fun () ->
+            box (session.ListSessions()))) |> ignore
+
         // Composition helpers
         engine.SetValue("print", Action<obj>(fun v ->
             eprintfn "%s" (Format.formatValue v))) |> ignore
@@ -196,7 +213,9 @@ module QueryEngine =
 
     /// Wrap JS in an IIFE for evaluation.
     let private wrapIIFE (js: string) =
-        let stripped = js.Split('\n') |> Array.map (fun line ->
+        // Ref-ID shorthand: rewrite bare R123 to 'R123' (outside of strings)
+        let refRewritten = Regex.Replace(js, @"(?<![""'a-zA-Z_])R(\d+)(?![""'a-zA-Z_])", "'R$1'")
+        let stripped = refRewritten.Split('\n') |> Array.map (fun line ->
             let commentIdx = line.IndexOf("//")
             if commentIdx >= 0 then line.Substring(0, commentIdx) else line) |> String.concat "\n"
         let trimmed = stripped.Trim()

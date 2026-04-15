@@ -17,6 +17,7 @@ let printUsage () =
     printfn "  knowledge-sight search <js> [--json] [--repo <path>]  Run a query"
     printfn "  knowledge-sight eval <js> [--json] [--repo <path>]    Alias for search"
     printfn "  knowledge-sight eval - [--json] [--repo <path>]       Read expression from stdin"
+    printfn "  knowledge-sight repl [--repo <path>]                   Interactive mode"
     printfn "  knowledge-sight orphans [--repo <path>]              Find unlinked docs"
     printfn "  knowledge-sight broken [--repo <path>]               Find broken links"
     printfn "  knowledge-sight stale [--repo <path>]                Find docs drifting from source"
@@ -55,6 +56,10 @@ let printUsage () =
     printfn "  placement(content, {limit})          Suggest where new content fits"
     printfn "  walk(file, {depth, direction})       Traverse the link graph"
     printfn "  changed(gitRef)                      Chunks in files changed since a git ref"
+    printfn "  explain(refId)                       Debug: show index metadata for a ref"
+    printfn "  saveSession(name)                    Save current ref session as a named snapshot"
+    printfn "  loadSession(name)                    Load a previously saved ref session"
+    printfn "  sessions()                           List saved sessions"
     printfn "  novelty(text, {threshold})           Detect novel knowledge in text"
     printfn "  cluster(dir, {threshold})            Cluster docs by similarity"
     printfn "  gaps({scope, min_docs, signal})      Find coverage gaps"
@@ -90,7 +95,7 @@ let parseArgs (args: string[]) =
         | "--help" | "-h" ->
             command <- "help"
             i <- i + 1
-        | "index" | "catalog" | "orphans" | "broken" | "stale" | "health" ->
+        | "index" | "catalog" | "orphans" | "broken" | "stale" | "health" | "repl" ->
             command <- args.[i]
             i <- i + 1
         | "fn" when i + 1 < args.Length ->
@@ -542,6 +547,29 @@ let main args =
                         printfn "       in: %s > %s" (string d.["nearDoc"]) (string d.["nearSection"])
                     if covered.Length > 5 then printfn "  ... and %d more" (covered.Length - 5)
                 0
+
+    | "repl" ->
+        match IndexStore.load cfg.IndexDir with
+        | None -> eprintfn "No index found. Run: knowledge-sight index"; 1
+        | Some index ->
+            let chunks = IndexStore.loadSourceChunks cfg.IndexDir
+            if chunks.IsSome then eprintfn "[loaded %d cached source chunks]" chunks.Value.Length
+            let engine = QueryEngine.create index chunks cfg.EmbeddingUrl cfg.IndexDir cfg.RepoRoot
+            eprintfn "knowledge-sight REPL. Type JS queries, 'quit' to exit."
+            eprintfn "  search(q,opts), context(file), expand(id), neighborhood(id,opts),"
+            eprintfn "  similar(id,opts), grep(pattern,opts), files(p?), catalog(),"
+            eprintfn "  backlinks(file), links(file), orphans(), broken(), gaps(opts)"
+            eprintfn ""
+            let mutable running = true
+            while running do
+                eprintf "> "
+                let line = System.Console.ReadLine()
+                if line = null || line.Trim() = "quit" || line.Trim() = "exit" then
+                    running <- false
+                elif line.Trim() <> "" then
+                    printfn "%s" (QueryEngine.eval engine (line.Trim()))
+                    printfn ""
+            0
 
     | "search" | _ when query <> "" ->
         match IndexStore.load cfg.IndexDir with
